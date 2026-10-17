@@ -1,0 +1,1209 @@
+desc:LMS - Satan's Little Pedal Board (DOA666 / Hardware Incompatible / Black Mass / The Elephant / Pipeworks / Unholy Bowl)
+//tags: guitar bass pedalboard distortion modulation delay reverb
+//author: LMS
+//version: 1.0
+//license: GPL-3.0
+filename:0,shakebot_logo.png
+
+import lms_core.jsfx-inc
+
+in_pin:Input L
+in_pin:Input R
+out_pin:Output L
+out_pin:Output R
+
+// This plugin is a CONTAINER. Every pedal is a call into lms_core:
+//   DOA666  = lms_odb3_*
+//   HWI     = lms_bd2_*
+//   B.MASS  = lms_chorus_*
+//   ELEPH   = lms_bbd_delay_*
+//   PIPES   = lms_flanger_*
+//   U.BOWL  = lms_spring_* (Spring) / lms_hall_* (Hall) / Hall+Flanger (Flerb)
+// No DSP lives here. If a pedal needs to improve, edit lms_core once,
+// every host plugin gets the upgrade.
+
+// ============================================================
+//  SLIDERS
+// ============================================================
+slider1:0<-24,24,0.1>-Input Trim (dB)
+slider2:0<-24,24,0.1>-Output Trim (dB)
+slider3:0<0,1,1{Engaged,All Bypass}>-Master Bypass
+
+// DOA666 (Boss ODB-3)
+slider5:0<0,1,1{Off,On}>-DOA666
+slider6:50<0,100,1>-DOA Drive (%)
+slider7:50<0,100,1>-DOA Blend (%)
+slider8:50<0,100,1>-DOA Low (%)
+slider9:50<0,100,1>-DOA High (%)
+
+// HARDWARE INCOMPATIBLE (Boss BD-2 Blues Driver)
+slider10:0<0,1,1{Off,On}>-HARDWARE INCOMPATIBLE
+slider11:50<0,100,1>-HWI Drive (%)
+slider12:50<0,100,1>-HWI Tone (%)
+slider13:50<0,100,1>-HWI Level (%)
+slider14:0<0,100,1>-HWI Tight (%)
+
+// BLACK MASS (CE-2 Chorus)
+slider15:0<0,1,1{Off,On}>-BLACK MASS
+slider16:30<0,100,1>-BM Rate (%)
+slider17:50<0,100,1>-BM Depth (%)
+slider18:50<0,100,1>-BM Mix (%)
+slider19:50<0,100,1>-BM Tone (%)
+
+// THE ELEPHANT (EHX Memory Boy)
+slider20:0<0,1,1{Off,On}>-THE ELEPHANT
+slider21:380<30,600,1>-EL Delay (ms)
+slider22:45<0,90,1>-EL Feedback (%)
+slider23:50<0,100,1>-EL Blend (%)
+slider24:35<0,100,1>-EL Chorus Depth (%)
+slider25:20<0,100,1>-EL Chorus Rate (%)
+
+// PIPEWORKS (BF-2 Flanger)
+slider26:0<0,1,1{Off,On}>-PIPEWORKS
+slider27:20<0,100,1>-PW Rate (%)
+slider28:60<0,100,1>-PW Depth (%)
+slider29:50<-95,95,1>-PW Feedback (%)
+slider30:30<0,100,1>-PW Manual (%)
+slider31:50<0,100,1>-PW Mix (%)
+
+// UNHOLY BOWL (EHX Holy Grail)
+slider32:0<0,1,1{Off,On}>-UNHOLY BOWL
+slider33:0<0,2,1{Spring,Hall,Flerb}>-UB Mode
+slider34:35<0,100,1>-UB Amount (%)
+slider35:50<0,100,1>-UB Tone (%)
+
+// SECTION ORDER (section-flow presets — moves DIST/MOD/DELAY/REVERB/EQ around; 12STEPPER always first)
+slider36:0<0,5,1{Classic,Pre-EQ Drive,Mod to Drive,Echo to Drive,Verb to Drive,Loop}>-Section Order
+
+// IN COMP (FET compressor — lms_comp from core, same as RTW)
+slider40:0<0,1,1{Off,On}>-In Comp
+slider41:-18<-40,0,0.1>-In Thresh (dB)
+slider42:4<1,20,0.1>-In Ratio
+slider43:5<0.1,100,0.1>-In Attack (ms)
+slider44:100<5,2000,1>-In Release (ms)
+slider45:0<-12,24,0.1>-In Makeup (dB)
+
+// OUT COMP (FET compressor)
+slider50:0<0,1,1{Off,On}>-Out Comp
+slider51:-12<-40,0,0.1>-Out Thresh (dB)
+slider52:3<1,20,0.1>-Out Ratio
+slider53:10<0.1,100,0.1>-Out Attack (ms)
+slider54:150<5,2000,1>-Out Release (ms)
+slider55:0<-12,24,0.1>-Out Makeup (dB)
+
+// MARMOT (ProCo RAT distortion)
+slider4:0<0,1,1{Off,On}>-MARMOT
+slider57:50<0,100,1>-MA Drive (%)
+slider58:50<0,100,1>-MA Tone (%)
+slider59:50<0,100,1>-MA Level (%)
+
+// 12 STEPPER (analog octave pedal)
+slider37:0<0,1,1{Off,On}>-12 STEPPER
+slider61:100<0,100,1>-12S Dry (%)
+slider62:50<0,100,1>-12S Oct -12
+slider63:0<0,100,1>-12S Oct -24
+slider64:0<0,100,1>-12S Oct +12
+
+// GREEN SIN (Ibanez Tube Screamer TS-808/TS-9)
+slider38:0<0,1,1{Off,On}>-GREEN SIN
+slider66:50<0,100,1>-GS Drive (%)
+slider67:50<0,100,1>-GS Tone (%)
+slider68:50<0,100,1>-GS Level (%)
+
+// GOLDEN CALF (Klon Centaur — transparent overdrive)
+slider46:0<0,1,1{Off,On}>-GOLDEN CALF
+slider47:30<0,100,1>-GC Drive (%)
+slider48:50<0,100,1>-GC Treble (%)
+slider49:50<0,100,1>-GC Level (%)
+
+// JUDGEMENT DAY (Parametric EQ — Punk / Jazz / Metal / Flat)
+slider39:0<0,1,1{Off,On}>-JUDGEMENT DAY
+slider71:3<0,3,1{Punk,Jazz,Metal,Flat}>-JD Mode
+slider72:0<-12,12,0.1>-JD Low (dB)
+slider73:0<-12,12,0.1>-JD Mid (dB)
+slider74:0<-12,12,0.1>-JD High (dB)
+slider75:0<-12,12,0.1>-JD Presence (dB)
+slider76:0<-12,12,0.1>-JD Level (dB)
+
+
+// ============================================================
+//  @INIT — buffer allocation + instantiate lms_* primitives
+// ============================================================
+@init
+
+// ------------------------------------------------------------
+//  BUFFER LAYOUT (caller-owned, handed to core primitives)
+// ------------------------------------------------------------
+BM_BUF       = 0;        BM_BUF_SIZE = 4096;            // chorus
+EL_BUF       = 4096;     EL_BUF_SIZE = 131072;          // Memory Boy
+PW_BUF       = 135168;   PW_BUF_SIZE = 4096;            // flanger
+FLERB_FL_BUF = 139264;   FLERB_FL_SIZE = 4096;          // internal flanger for Flerb mode
+UB_FDN_BUF   = 143360;   UB_LINE_LEN  = 4096;           // hall FDN (4 lines × 4096)
+UB_PRE_BUF   = 159744;   UB_PRE_SIZE  = 2048;           // hall pre-delay
+UB_SPRING_BUF = 170100;  UB_SPRING_SIZE = 11000;        // spring reverb (core hardcodes 50000 which lands inside EL_BUF)
+// TUNER_BUF (YIN circular buffer + workspace, 8192 slots) reserved at 161908,
+// after the SECTION_/CHAIN_ORDER/EQ_DEFAULTS scratch arrays (see @init below).
+// Sized for min_freq=55 detection at sample rates up to 96kHz.
+
+// ------------------------------------------------------------
+//  SECTION-BASED CHAIN ORDER
+//
+//  The chain is organized by SECTION, not by individual pedal. Presets move
+//  sections around. Within a section the pedal order is fixed. 12 STEPPER
+//  sits at the very front (octavers track cleanest on raw input).
+//
+//  Pedal IDs: 0=DOA 1=HWI 2=BM 3=EL 4=PW 5=UB 6=MARMOT 7=12STEPPER 8=TS 9=EQ 10=KLON
+//  Section IDs: 0=DIST, 1=MOD, 2=DELAY, 3=REVERB, 4=EQ
+//
+//  To add a new pedal: add it to SECTION_CONTENTS under its section and bump
+//  the corresponding SECTION_LENGTHS entry. All presets pick up the change.
+// ------------------------------------------------------------
+SECTION_PRESETS  = 161792;  // 6 presets × 5 sections = 30 ints
+SECTION_ORDER    = 161822;  // 5 active section IDs
+SECTION_CONTENTS = 161827;  // 5 sections × 8 slots = 40 ints
+SECTION_LENGTHS  = 161867;  // 5 ints — how many pedals in each section
+CHAIN_ORDER      = 161872;  // flattened pedal IDs (12 STEPPER + sections), 16-slot headroom
+
+// Section contents — pedal order WITHIN each section is fixed here.
+// DIST: KLON → GREEN SIN → HWI → DOA666 → MARMOT  (transparent → tight → loose)
+SECTION_LENGTHS[0] = 5;
+SECTION_CONTENTS[0] = 10; SECTION_CONTENTS[1] = 8; SECTION_CONTENTS[2] = 1;
+SECTION_CONTENTS[3] = 0; SECTION_CONTENTS[4] = 6;
+// MOD: BLACK MASS → PIPEWORKS  (chorus before flanger)
+SECTION_LENGTHS[1] = 2;
+SECTION_CONTENTS[8] = 2; SECTION_CONTENTS[9] = 4;
+// DELAY: THE ELEPHANT
+SECTION_LENGTHS[2] = 1;
+SECTION_CONTENTS[16] = 3;
+// REVERB: UNHOLY BOWL
+SECTION_LENGTHS[3] = 1;
+SECTION_CONTENTS[24] = 5;
+// EQ: THE JUDGE
+SECTION_LENGTHS[4] = 1;
+SECTION_CONTENTS[32] = 9;
+
+// Presets — each is 5 section IDs in play order
+// 0: CLASSIC          DIST → MOD → DELAY → REVERB → EQ
+SECTION_PRESETS[ 0] = 0; SECTION_PRESETS[ 1] = 1; SECTION_PRESETS[ 2] = 2;
+SECTION_PRESETS[ 3] = 3; SECTION_PRESETS[ 4] = 4;
+// 1: PRE-EQ DRIVE     EQ → DIST → MOD → DELAY → REVERB   (shape input into drives)
+SECTION_PRESETS[ 5] = 4; SECTION_PRESETS[ 6] = 0; SECTION_PRESETS[ 7] = 1;
+SECTION_PRESETS[ 8] = 2; SECTION_PRESETS[ 9] = 3;
+// 2: MOD TO DRIVE     MOD → DIST → DELAY → REVERB → EQ
+SECTION_PRESETS[10] = 1; SECTION_PRESETS[11] = 0; SECTION_PRESETS[12] = 2;
+SECTION_PRESETS[13] = 3; SECTION_PRESETS[14] = 4;
+// 3: ECHO TO DRIVE    DELAY → DIST → MOD → REVERB → EQ
+SECTION_PRESETS[15] = 2; SECTION_PRESETS[16] = 0; SECTION_PRESETS[17] = 1;
+SECTION_PRESETS[18] = 3; SECTION_PRESETS[19] = 4;
+// 4: VERB TO DRIVE    REVERB → DIST → MOD → DELAY → EQ
+SECTION_PRESETS[20] = 3; SECTION_PRESETS[21] = 0; SECTION_PRESETS[22] = 1;
+SECTION_PRESETS[23] = 2; SECTION_PRESETS[24] = 4;
+// 5: LOOP             DIST → EQ → MOD → DELAY → REVERB   (EQ mid-chain, amp-loop feel)
+SECTION_PRESETS[25] = 0; SECTION_PRESETS[26] = 4; SECTION_PRESETS[27] = 1;
+SECTION_PRESETS[28] = 2; SECTION_PRESETS[29] = 3;
+
+// Build CHAIN_ORDER from SECTION_ORDER. Called whenever the preset changes.
+function build_chain_order() local(i, j, k, sec_id) (
+  CHAIN_ORDER[0] = 7;   // 12 STEPPER always first (pedal ID 7)
+  i = 1;
+  j = 0;
+  loop(5,
+    sec_id = SECTION_ORDER[j];
+    k = 0;
+    loop(SECTION_LENGTHS[sec_id],
+      CHAIN_ORDER[i] = SECTION_CONTENTS[sec_id * 8 + k];
+      i += 1;
+      k += 1;
+    );
+    j += 1;
+  );
+  CHAIN_ORDER_LEN = i;
+);
+
+// ------------------------------------------------------------
+//  INSTANTIATE PEDALS (all calls into lms_core)
+// ------------------------------------------------------------
+// Stereo dist pedals: paired L/R instances for true-stereo processing
+pb_doa_l.lms_odb3_init();  pb_doa_r.lms_odb3_init();
+pb_doa_l.lms_odb3_set(0.5, 0.5);  pb_doa_r.lms_odb3_set(0.5, 0.5);
+
+pb_hwi_l.lms_bd2_init();   pb_hwi_r.lms_bd2_init();
+pb_hwi_l.lms_bd2_set(0.5, 0.0);  pb_hwi_r.lms_bd2_set(0.5, 0.0);
+
+// Modulation & time-based pedals: mono core (summed input, wet added to stereo)
+pb_bm.lms_chorus_init(BM_BUF, BM_BUF_SIZE);
+pb_bm.lms_chorus_set(0.3, 0.5);
+
+pb_el.lms_bbd_delay_init(EL_BUF, EL_BUF_SIZE);
+pb_el.lms_bbd_delay_set(0.2);
+
+pb_pw.lms_flanger_init(PW_BUF, PW_BUF_SIZE);
+pb_pw.lms_flanger_set(0.2);
+
+// UNHOLY BOWL — all three modes live here
+pb_ub_spring.lms_spring_init();
+pb_ub_spring.buf_base = UB_SPRING_BUF;
+memset(UB_SPRING_BUF, 0, UB_SPRING_SIZE);
+pb_ub_hall.lms_hall_init(UB_FDN_BUF, UB_LINE_LEN, UB_PRE_BUF, UB_PRE_SIZE);
+pb_ub_hall.lms_hall_set(0.5);
+// Flerb composes Hall → internal flanger on the wet tail:
+pb_ub_flerb.lms_flanger_init(FLERB_FL_BUF, FLERB_FL_SIZE);
+pb_ub_flerb.lms_flanger_set(0.1);
+
+// Input + Output FET compressors (same lms_comp_* as RTW)
+in_comp.lms_comp_init();
+in_comp.lms_comp_set(-18, 4, 5, 100);
+out_comp.lms_comp_init();
+out_comp.lms_comp_set(-12, 3, 10, 150);
+
+// MARMOT — stereo via paired instances
+pb_marmot_l.lms_marmot_init();  pb_marmot_r.lms_marmot_init();
+pb_marmot_l.lms_marmot_set(0.5, 0.5);  pb_marmot_r.lms_marmot_set(0.5, 0.5);
+
+// 12 STEPPER — mono (octave pedal is inherently monophonic)
+pb_stepper.lms_12stepper_init();
+pb_stepper.lms_12stepper_set(0.5);
+
+// GREEN SIN — Tube Screamer, stereo (paired L/R)
+pb_ts_l.lms_ts_init();  pb_ts_r.lms_ts_init();
+pb_ts_l.lms_ts_set(0.5);  pb_ts_r.lms_ts_set(0.5);
+
+// GOLDEN CALF — Klon Centaur, stereo (paired L/R)
+pb_klon_l.lms_klon_init();  pb_klon_r.lms_klon_init();
+pb_klon_l.lms_klon_set(0.5);  pb_klon_r.lms_klon_set(0.5);
+
+// THE JUDGE — parametric EQ, stereo (paired L/R; linear so phase-aligned)
+pb_eq_l.lms_paraeq_init();  pb_eq_r.lms_paraeq_init();
+pb_eq_l.lms_paraeq_set(3, 0, 0, 0, 0);  pb_eq_r.lms_paraeq_set(3, 0, 0, 0, 0);
+
+// ------------------------------------------------------------
+//  Per-pedal run_* — each reads/writes globals l_, r_
+//  Called by the order dispatcher in @sample.
+// ------------------------------------------------------------
+function run_doa() (
+  doa_on ? (
+    l_ = pb_doa_l.lms_odb3_proc(l_, doa_drive, doa_blend);
+    r_ = pb_doa_r.lms_odb3_proc(r_, doa_drive, doa_blend);
+  );
+);
+function run_hwi() (
+  hwi_on ? (
+    l_ = pb_hwi_l.lms_bd2_proc(l_, hwi_drive, hwi_level);
+    r_ = pb_hwi_r.lms_bd2_proc(r_, hwi_drive, hwi_level);
+  );
+);
+function run_bm() local(mono, wet) (
+  bm_on ? (
+    mono = (l_ + r_) * 0.5;
+    wet = pb_bm.lms_chorus_proc(mono, bm_depth);
+    l_ = l_ + wet * bm_mix;
+    r_ = r_ + wet * bm_mix;
+  );
+);
+function run_el() local(mono, wet) (
+  el_on ? (
+    mono = (l_ + r_) * 0.5;
+    wet = pb_el.lms_bbd_delay_proc(mono, el_delay_ms, el_fb, el_depth);
+    l_ = l_ + wet * el_blend;
+    r_ = r_ + wet * el_blend;
+  );
+);
+function run_pw() local(mono, wet) (
+  pw_on ? (
+    mono = (l_ + r_) * 0.5;
+    wet = pb_pw.lms_flanger_proc(mono, pw_depth, pw_fb, pw_manual);
+    l_ = l_ * (1 - pw_mix * 0.5) + wet * pw_mix;
+    r_ = r_ * (1 - pw_mix * 0.5) + wet * pw_mix;
+  );
+);
+function run_ub() local(mono, wet, hall_wet) (
+  ub_on ? (
+    mono = (l_ + r_) * 0.5;
+    ub_mode == 0 ? (
+      wet = pb_ub_spring.lms_spring_proc(mono, ub_amount) - mono;
+    ) : ub_mode == 1 ? (
+      wet = pb_ub_hall.lms_hall_proc(mono, ub_amount);
+    ) : (
+      hall_wet = pb_ub_hall.lms_hall_proc(mono, 1.0);
+      wet = pb_ub_flerb.lms_flanger_proc(hall_wet, 0.5, 0.5, 0.3) * ub_amount;
+    );
+    l_ = l_ + wet;
+    r_ = r_ + wet;
+  );
+);
+function run_marmot() (
+  ma_on ? (
+    l_ = pb_marmot_l.lms_marmot_proc(l_, ma_drive, ma_level);
+    r_ = pb_marmot_r.lms_marmot_proc(r_, ma_drive, ma_level);
+  );
+);
+function run_stepper() local(mono, wet) (
+  st_on ? (
+    mono = (l_ + r_) * 0.5;
+    wet = pb_stepper.lms_12stepper_proc(mono, st_dry, st_dn1, st_dn2, st_up);
+    // Octave pedal is a full replacement of the signal (dry is in the mix already)
+    l_ = wet;
+    r_ = wet;
+  );
+);
+function run_ts() (
+  ts_on ? (
+    l_ = pb_ts_l.lms_ts_proc(l_, ts_drive, ts_level);
+    r_ = pb_ts_r.lms_ts_proc(r_, ts_drive, ts_level);
+  );
+);
+function run_klon() (
+  klon_on ? (
+    l_ = pb_klon_l.lms_klon_proc(l_, klon_drive, klon_level);
+    r_ = pb_klon_r.lms_klon_proc(r_, klon_drive, klon_level);
+  );
+);
+function run_eq() (
+  eq_on ? (
+    l_ = pb_eq_l.lms_paraeq_proc(l_) * eq_level;
+    r_ = pb_eq_r.lms_paraeq_proc(r_) * eq_level;
+  );
+);
+
+// Parameter cache
+in_trim = 1.0; out_trim = 1.0; master_bp = 0;
+doa_on = 0; doa_drive = 0.5; doa_blend = 0.5; doa_low = 0.5; doa_high = 0.5;
+hwi_on = 0; hwi_drive = 0.5; hwi_tone = 0.5; hwi_level = 0.5; hwi_tight = 0.0;
+bm_on  = 0; bm_rate = 0.3; bm_depth = 0.5; bm_mix = 0.5; bm_tone = 0.5;
+el_on  = 0; el_delay_ms = 380; el_fb = 0.45; el_blend = 0.5; el_depth = 0.35; el_rate = 0.2;
+pw_on  = 0; pw_rate = 0.2; pw_depth = 0.6; pw_fb = 0.5; pw_manual = 0.3; pw_mix = 0.5;
+ub_on  = 0; ub_mode = 0; ub_amount = 0.35; ub_tone = 0.5;
+ma_on  = 0; ma_drive = 0.5; ma_tone = 0.5; ma_level = 0.5;
+st_on  = 0; st_dry = 1.0; st_dn1 = 0.5; st_dn2 = 0; st_up = 0;
+chain_order_sel = 0;
+in_comp_on = 0; in_comp_makeup = 1.0;
+out_comp_on = 0; out_comp_makeup = 1.0;
+ts_on = 0; ts_drive = 0.5; ts_tone = 0.5; ts_level = 0.5;
+klon_on = 0; klon_drive = 0.3; klon_treble = 0.5; klon_level = 0.5;
+eq_on = 0; eq_mode = 3; eq_lo = 0; eq_mid = 0; eq_hi = 0; eq_pr = 0; eq_level = 1.0;
+
+// JUDGEMENT DAY preset knob defaults (applied when the user changes mode)
+// Rows: mode 0=Punk, 1=Jazz, 2=Metal, 3=Flat. Columns: lo, mid, hi, pr, level.
+EQ_DEFAULTS = 161888;  // 4 modes × 5 knobs = 20 ints, after CHAIN_ORDER
+EQ_DEFAULTS[ 0]=  3; EQ_DEFAULTS[ 1]= -3; EQ_DEFAULTS[ 2]=  0; EQ_DEFAULTS[ 3]=  4; EQ_DEFAULTS[ 4]= 0;  // PUNK
+EQ_DEFAULTS[ 5]=  2; EQ_DEFAULTS[ 6]=  1; EQ_DEFAULTS[ 7]= -1; EQ_DEFAULTS[ 8]= -2; EQ_DEFAULTS[ 9]= 0;  // JAZZ
+EQ_DEFAULTS[10]=  4; EQ_DEFAULTS[11]= -6; EQ_DEFAULTS[12]=  2; EQ_DEFAULTS[13]=  5; EQ_DEFAULTS[14]= 0;  // METAL
+EQ_DEFAULTS[15]=  0; EQ_DEFAULTS[16]=  0; EQ_DEFAULTS[17]=  0; EQ_DEFAULTS[18]=  0; EQ_DEFAULTS[19]= 0;  // FLAT
+// Init cache so the first @block doesn't clobber the user's saved state.
+eq_mode_last = slider71;
+
+// === TUNER (YIN-based, drop-tuning safe, OFF by default) ===
+TUNER_BUF = 161908;  // 8192 reserved slots — fits min_freq=55 up to 96kHz
+tuner.lms_tuner_init(TUNER_BUF);
+
+// Populate SECTION_ORDER from default preset, then flatten into CHAIN_ORDER
+i = 0; loop(5, SECTION_ORDER[i] = SECTION_PRESETS[chain_order_sel * 5 + i]; i += 1;);
+build_chain_order();
+
+notice_show = 0;
+buy_show = 0;
+
+
+// ============================================================
+//  @SLIDER
+// ============================================================
+@slider
+in_trim   = lms_db2lin(slider1);
+out_trim  = lms_db2lin(slider2);
+master_bp = slider3;
+
+doa_on    = slider5;
+doa_drive = slider6 / 100;
+doa_blend = slider7 / 100;
+doa_low   = slider8 / 100;
+doa_high  = slider9 / 100;
+pb_doa_l.lms_odb3_set(doa_low, doa_high);
+pb_doa_r.lms_odb3_set(doa_low, doa_high);
+
+hwi_on    = slider10;
+hwi_drive = slider11 / 100;
+hwi_tone  = slider12 / 100;
+hwi_level = slider13 / 100;
+hwi_tight = slider14 / 100;
+pb_hwi_l.lms_bd2_set(hwi_tone, hwi_tight);
+pb_hwi_r.lms_bd2_set(hwi_tone, hwi_tight);
+
+bm_on    = slider15;
+bm_rate  = slider16 / 100;
+bm_depth = slider17 / 100;
+bm_mix   = slider18 / 100;
+bm_tone  = slider19 / 100;
+pb_bm.lms_chorus_set(bm_rate, bm_tone);
+
+el_on       = slider20;
+el_delay_ms = slider21;
+el_fb       = slider22 / 100;
+el_blend    = slider23 / 100;
+el_depth    = slider24 / 100;
+el_rate     = slider25 / 100;
+pb_el.lms_bbd_delay_set(el_rate);
+
+pw_on     = slider26;
+pw_rate   = slider27 / 100;
+pw_depth  = slider28 / 100;
+pw_fb     = slider29 / 100;
+pw_manual = slider30 / 100;
+pw_mix    = slider31 / 100;
+pb_pw.lms_flanger_set(pw_rate);
+
+ub_on     = slider32;
+ub_mode   = slider33;
+ub_amount = slider34 / 100;
+ub_tone   = slider35 / 100;
+pb_ub_hall.lms_hall_set(ub_tone);
+
+chain_order_sel = slider36;
+i = 0; loop(5, SECTION_ORDER[i] = SECTION_PRESETS[chain_order_sel * 5 + i]; i += 1;);
+build_chain_order();
+
+// Input comp
+in_comp_on     = slider40;
+in_comp.lms_comp_set(slider41, slider42, slider43, slider44);
+in_comp_makeup = lms_db2lin(slider45);
+
+// Output comp
+out_comp_on    = slider50;
+out_comp.lms_comp_set(slider51, slider52, slider53, slider54);
+out_comp_makeup = lms_db2lin(slider55);
+
+// MARMOT
+ma_on    = slider4;
+ma_drive = slider57 / 100;
+ma_tone  = slider58 / 100;
+ma_level = slider59 / 100;
+pb_marmot_l.lms_marmot_set(ma_drive, ma_tone);
+pb_marmot_r.lms_marmot_set(ma_drive, ma_tone);
+
+// 12 STEPPER
+st_on  = slider37;
+st_dry = slider61 / 100;
+st_dn1 = slider62 / 100;
+st_dn2 = slider63 / 100;
+st_up  = slider64 / 100;
+
+// GREEN SIN (Tube Screamer)
+ts_on    = slider38;
+ts_drive = slider66 / 100;
+ts_tone  = slider67 / 100;
+ts_level = slider68 / 100 * 2.0;  // 0..2× so user can make up level
+pb_ts_l.lms_ts_set(ts_tone);
+pb_ts_r.lms_ts_set(ts_tone);
+
+// GOLDEN CALF (Klon Centaur)
+klon_on    = slider46;
+klon_drive = slider47 / 100;
+klon_treble = slider48 / 100;
+klon_level = slider49 / 100;
+pb_klon_l.lms_klon_set(klon_treble);
+pb_klon_r.lms_klon_set(klon_treble);
+
+// THE JUDGE (Parametric EQ)
+eq_on    = slider39;
+eq_mode  = slider71;
+eq_lo    = slider72;
+eq_mid   = slider73;
+eq_hi    = slider74;
+eq_pr    = slider75;
+eq_level = lms_db2lin(slider76);
+pb_eq_l.lms_paraeq_set(eq_mode, eq_lo, eq_mid, eq_hi, eq_pr);
+pb_eq_r.lms_paraeq_set(eq_mode, eq_lo, eq_mid, eq_hi, eq_pr);
+
+
+// ============================================================
+//  @BLOCK — broadcast sync + recalc (GFX doesn't trigger @slider)
+// ============================================================
+@block
+in_trim   = lms_db2lin(slider1);
+out_trim  = lms_db2lin(slider2);
+master_bp = slider3;
+doa_on = slider5; doa_drive = slider6/100; doa_blend = slider7/100;
+doa_low = slider8/100; doa_high = slider9/100;
+pb_doa_l.lms_odb3_set(doa_low, doa_high);
+pb_doa_r.lms_odb3_set(doa_low, doa_high);
+hwi_on = slider10; hwi_drive = slider11/100; hwi_tone = slider12/100;
+hwi_level = slider13/100; hwi_tight = slider14/100;
+pb_hwi_l.lms_bd2_set(hwi_tone, hwi_tight);
+pb_hwi_r.lms_bd2_set(hwi_tone, hwi_tight);
+bm_on = slider15; bm_rate = slider16/100; bm_depth = slider17/100;
+bm_mix = slider18/100; bm_tone = slider19/100;
+pb_bm.lms_chorus_set(bm_rate, bm_tone);
+el_on = slider20; el_delay_ms = slider21; el_fb = slider22/100;
+el_blend = slider23/100; el_depth = slider24/100; el_rate = slider25/100;
+pb_el.lms_bbd_delay_set(el_rate);
+pw_on = slider26; pw_rate = slider27/100; pw_depth = slider28/100;
+pw_fb = slider29/100; pw_manual = slider30/100; pw_mix = slider31/100;
+pb_pw.lms_flanger_set(pw_rate);
+ub_on = slider32; ub_mode = slider33; ub_amount = slider34/100; ub_tone = slider35/100;
+pb_ub_hall.lms_hall_set(ub_tone);
+chain_order_sel = slider36;
+i = 0; loop(5, SECTION_ORDER[i] = SECTION_PRESETS[chain_order_sel * 5 + i]; i += 1;);
+build_chain_order();
+in_comp_on = slider40;
+in_comp.lms_comp_set(slider41, slider42, slider43, slider44);
+in_comp_makeup = lms_db2lin(slider45);
+out_comp_on = slider50;
+out_comp.lms_comp_set(slider51, slider52, slider53, slider54);
+out_comp_makeup = lms_db2lin(slider55);
+ma_on = slider4; ma_drive = slider57/100; ma_tone = slider58/100; ma_level = slider59/100;
+pb_marmot_l.lms_marmot_set(ma_drive, ma_tone);
+pb_marmot_r.lms_marmot_set(ma_drive, ma_tone);
+st_on = slider37; st_dry = slider61/100; st_dn1 = slider62/100; st_dn2 = slider63/100; st_up = slider64/100;
+
+ts_on = slider38; ts_drive = slider66/100; ts_tone = slider67/100; ts_level = slider68/100 * 2.0;
+pb_ts_l.lms_ts_set(ts_tone);
+pb_ts_r.lms_ts_set(ts_tone);
+
+klon_on = slider46; klon_drive = slider47/100; klon_treble = slider48/100; klon_level = slider49/100;
+pb_klon_l.lms_klon_set(klon_treble);
+pb_klon_r.lms_klon_set(klon_treble);
+
+eq_on = slider39; eq_mode = slider71;
+// JUDGEMENT DAY: when the mode changes, snap the knobs to that preset's
+// defaults so the user sees the actual curve values and can tweak from there.
+eq_mode_last != slider71 ? (
+  slider72 = EQ_DEFAULTS[slider71 * 5 + 0];
+  slider73 = EQ_DEFAULTS[slider71 * 5 + 1];
+  slider74 = EQ_DEFAULTS[slider71 * 5 + 2];
+  slider75 = EQ_DEFAULTS[slider71 * 5 + 3];
+  slider76 = EQ_DEFAULTS[slider71 * 5 + 4];
+  eq_mode_last = slider71;
+);
+eq_lo = slider72; eq_mid = slider73; eq_hi = slider74; eq_pr = slider75;
+eq_level = lms_db2lin(slider76);
+pb_eq_l.lms_paraeq_set(eq_mode, eq_lo, eq_mid, eq_hi, eq_pr);
+pb_eq_r.lms_paraeq_set(eq_mode, eq_lo, eq_mid, eq_hi, eq_pr);
+
+// Run YIN pitch detection (per-block, so this isn't a per-sample cost)
+tuner.lms_tuner_block();
+
+
+// ============================================================
+//  @SAMPLE — the container: wire core pedals in series
+// ============================================================
+@sample
+// Feed the tuner the dry mono input — pre-effects so we always tune the source,
+// regardless of which pedals are engaged or master-bypass state.
+tuner.lms_tuner_write((spl0 + spl1) * 0.5);
+
+!master_bp ? (
+  l_ = spl0 * in_trim;
+  r_ = spl1 * in_trim;
+
+  // Input FET comp
+  in_comp_on ? (
+    in_comp.lms_comp_proc(l_, r_);
+    l_ = l_ * in_comp.gr * in_comp_makeup;
+    r_ = r_ * in_comp.gr * in_comp_makeup;
+  );
+
+  // Pedal dispatcher — walks CHAIN_ORDER, which was built from SECTION_ORDER
+  // by build_chain_order(). CHAIN_ORDER_LEN adapts as pedals get added.
+  i = 0;
+  loop(CHAIN_ORDER_LEN,
+    slot_id = CHAIN_ORDER[i];
+    slot_id == 0 ? run_doa() :
+    slot_id == 1 ? run_hwi() :
+    slot_id == 2 ? run_bm()  :
+    slot_id == 3 ? run_el()  :
+    slot_id == 4 ? run_pw()  :
+    slot_id == 5 ? run_ub()  :
+    slot_id == 6 ? run_marmot() :
+    slot_id == 7 ? run_stepper() :
+    slot_id == 8 ? run_ts() :
+    slot_id == 9 ? run_eq() :
+    slot_id == 10 ? run_klon();
+    i += 1;
+  );
+
+  // Output FET comp
+  out_comp_on ? (
+    out_comp.lms_comp_proc(l_, r_);
+    l_ = l_ * out_comp.gr * out_comp_makeup;
+    r_ = r_ * out_comp.gr * out_comp_makeup;
+  );
+
+  spl0 = l_ * out_trim;
+  spl1 = r_ * out_trim;
+);
+
+// Apply tuner mute (5ms ramped silence) at the very end, AFTER master_bp branch
+// so even bypassed audio gets muted while tuning.
+spl0 *= tuner.mute_gain;
+spl1 *= tuner.mute_gain;
+
+
+// ============================================================
+//  @GFX
+// ============================================================
+@gfx 1500 580
+
+gfx_ext_retina > 0 ? gfx_ext_retina = 1;
+!(mouse_cap & 1) ? (cap_bx = -1; cap_by = -1);
+S = gfx_w / 1500;
+S < 0.5 ? S = 0.5;
+
+F_TITLE = max(10, floor(22 * S));
+F_LABEL = max(8, floor(12 * S));
+F_SMALL = max(7, floor(11 * S));
+F_TINY  = max(7, floor(10 * S));
+
+COL_BG_R = 0.04; COL_BG_G = 0.03; COL_BG_B = 0.05;
+COL_PANEL_R = 0.09; COL_PANEL_G = 0.07; COL_PANEL_B = 0.10;
+COL_PANEL_HI_R = 0.14; COL_PANEL_HI_G = 0.10; COL_PANEL_HI_B = 0.14;
+COL_BORDER_R = 0.30; COL_BORDER_G = 0.15; COL_BORDER_B = 0.20;
+COL_TITLE_R = 0.95; COL_TITLE_G = 0.25; COL_TITLE_B = 0.25;
+COL_SEC_R = 0.80; COL_SEC_G = 0.35; COL_SEC_B = 0.20;
+COL_TEXT_R = 0.82; COL_TEXT_G = 0.78; COL_TEXT_B = 0.78;
+COL_DIM_R = 0.38; COL_DIM_G = 0.35; COL_DIM_B = 0.38;
+COL_ACCENT_R = 0.95; COL_ACCENT_G = 0.45; COL_ACCENT_B = 0.15;
+COL_GREEN_R = 0.30; COL_GREEN_G = 0.90; COL_GREEN_B = 0.40;
+COL_CYAN_R = 0.90; COL_CYAN_G = 0.25; COL_CYAN_B = 0.45;
+COL_BAR_BG_R = 0.12; COL_BAR_BG_G = 0.09; COL_BAR_BG_B = 0.12;
+
+hdr_h = floor(40 * S);
+gfx_r = COL_BG_R; gfx_g = COL_BG_G; gfx_b = COL_BG_B;
+gfx_rect(0, 0, gfx_w, gfx_h);
+gfx_r = 0.02; gfx_g = 0.02; gfx_b = 0.02;
+gfx_rect(0, 0, gfx_w, hdr_h);
+gfx_r = COL_TITLE_R * 0.6; gfx_g = 0; gfx_b = 0;
+gfx_rect(0, hdr_h, gfx_w, max(1, floor(2 * S)));
+
+// UI helpers (local to plugin — UI is not DSP)
+function draw_bar(bx, by, bw, bh, val, vmin, vmax, label, show_val)
+  local(norm, fill_w, new_norm) (
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(bx, by, bw, bh);
+  norm = (val - vmin) / (vmax - vmin);
+  norm = max(0, min(1, norm));
+  fill_w = norm * bw;
+  fill_w > 0 ? (
+    gfx_r = COL_CYAN_R * 0.5; gfx_g = COL_CYAN_G * 0.5; gfx_b = COL_CYAN_B * 0.5;
+    gfx_rect(bx, by, fill_w, bh);
+    gfx_r = COL_CYAN_R * 0.75; gfx_g = COL_CYAN_G * 0.75; gfx_b = COL_CYAN_B * 0.75;
+    gfx_rect(bx, by, fill_w, floor(bh / 2));
+    gfx_r = COL_CYAN_R; gfx_g = COL_CYAN_G; gfx_b = COL_CYAN_B;
+    gfx_rect(bx, by, fill_w, 1);
+  );
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(bx, by, bw, 1); gfx_rect(bx, by + bh - 1, bw, 1);
+  gfx_rect(bx, by, 1, bh); gfx_rect(bx + bw - 1, by, 1, bh);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", F_TINY);
+  gfx_x = bx + floor(4 * S); gfx_y = by + floor((bh - F_TINY) / 2);
+  gfx_drawstr(label);
+  show_val ? (
+    gfx_x = bx + bw - floor(30 * S); gfx_y = by + floor((bh - F_TINY) / 2);
+    gfx_drawnumber(val, val == floor(val) ? 0 : 1);
+  );
+  (mouse_cap & 1) && !(last_cap & 1) &&
+    mouse_x >= bx && mouse_x <= bx + bw &&
+    mouse_y >= by && mouse_y <= by + bh ? (
+      cap_bx = bx; cap_by = by;
+  );
+  (mouse_cap & 1) && cap_bx == bx && cap_by == by ? (
+    new_norm = (mouse_x - bx) / bw;
+    new_norm = max(0, min(1, new_norm));
+    val = vmin + new_norm * (vmax - vmin);
+  );
+  val;
+);
+
+function draw_panel(px, py, pw, ph, title, is_on) (
+  gfx_r = COL_PANEL_R; gfx_g = COL_PANEL_G; gfx_b = COL_PANEL_B;
+  gfx_rect(px, py, pw, ph);
+  gfx_r = COL_PANEL_HI_R; gfx_g = COL_PANEL_HI_G; gfx_b = COL_PANEL_HI_B;
+  gfx_rect(px, py, pw, floor(22 * S));
+  gfx_r = is_on ? COL_TITLE_R : COL_BORDER_R;
+  gfx_g = is_on ? COL_TITLE_G * 0.5 : COL_BORDER_G;
+  gfx_b = is_on ? COL_TITLE_B * 0.5 : COL_BORDER_B;
+  gfx_rect(px, py + floor(22 * S), pw, 1);
+  gfx_r = COL_BORDER_R * 0.7; gfx_g = COL_BORDER_G * 0.7; gfx_b = COL_BORDER_B * 0.7;
+  gfx_rect(px, py, pw, 1); gfx_rect(px, py, 1, ph);
+  gfx_rect(px + pw - 1, py, 1, ph); gfx_rect(px, py + ph - 1, pw, 1);
+  gfx_r = is_on ? COL_TITLE_R : COL_SEC_R;
+  gfx_g = is_on ? COL_TITLE_G : COL_SEC_G;
+  gfx_b = is_on ? COL_TITLE_B : COL_SEC_B;
+  gfx_setfont(1, "Arial", F_LABEL);
+  gfx_x = px + floor(6 * S); gfx_y = py + floor(4 * S);
+  gfx_drawstr(title);
+);
+
+function draw_toggle(tx, ty, is_on) local(cx, cy, r_out, r_in) (
+  cx = tx + floor(10 * S); cy = ty + floor(10 * S);
+  r_out = floor(9 * S); r_in = floor(6 * S);
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_circle(cx, cy, r_out, 0);
+  is_on ? (
+    gfx_r = COL_GREEN_R; gfx_g = COL_GREEN_G; gfx_b = COL_GREEN_B;
+    gfx_circle(cx, cy, r_in, 1);
+    gfx_a = 0.3;
+    gfx_circle(cx, cy, r_in + floor(2 * S), 1);
+    gfx_a = 1.0;
+  ) : (
+    gfx_r = 0.15; gfx_g = 0.13; gfx_b = 0.15;
+    gfx_circle(cx, cy, r_in, 1);
+  );
+  (mouse_cap & 1) && !(last_cap & 1) &&
+    mouse_x >= tx && mouse_x <= tx + floor(20 * S) &&
+    mouse_y >= ty && mouse_y <= ty + floor(20 * S) ? (
+      is_on = 1 - is_on;
+  );
+  is_on;
+);
+
+function draw_mode_sel(mx, my, mw, mh, val, vmax, label, v0, v1, v2)
+  local(new_val) (
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(mx, my, mw, mh);
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(mx, my, mw, 1); gfx_rect(mx, my + mh - 1, mw, 1);
+  gfx_rect(mx, my, 1, mh); gfx_rect(mx + mw - 1, my, 1, mh);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", F_TINY);
+  gfx_x = mx + floor(4 * S); gfx_y = my + floor((mh - F_TINY) / 2);
+  gfx_drawstr(label);
+  gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+  gfx_x = mx + mw - floor(55 * S); gfx_y = my + floor((mh - F_TINY) / 2);
+  val == 0 ? gfx_drawstr(v0);
+  val == 1 ? gfx_drawstr(v1);
+  val == 2 ? gfx_drawstr(v2);
+  new_val = val;
+  (mouse_cap & 1) && !(last_cap & 1) &&
+    mouse_x >= mx && mouse_x <= mx + mw &&
+    mouse_y >= my && mouse_y <= my + mh ? (
+      new_val = (val + 1) % (vmax + 1);
+  );
+  (mouse_cap & 2) && !(last_cap & 2) &&
+    mouse_x >= mx && mouse_x <= mx + mw &&
+    mouse_y >= my && mouse_y <= my + mh ? (
+      new_val = val - 1; new_val < 0 ? new_val = vmax;
+  );
+  new_val;
+);
+
+// --- TITLE ---
+gfx_getimgdim(0, logo_img_w, logo_img_h);
+logo_img_w > 0 ? (
+  logo_h = floor(28 * S);
+  logo_w = floor(logo_h * (logo_img_w / logo_img_h));
+  logo_x = floor(6 * S);
+  logo_y = floor(((hdr_h - logo_h)) / 2);
+  gfx_blit(0, 1, 0, 0, 0, logo_img_w, logo_img_h, logo_x, logo_y, logo_w, logo_h);
+) : (
+  logo_w = 0; logo_x = 0;
+);
+gfx_r = COL_TITLE_R; gfx_g = COL_TITLE_G; gfx_b = COL_TITLE_B;
+gfx_setfont(1, "Arial", F_TITLE);
+gfx_x = logo_x + logo_w + floor(8 * S); gfx_y = floor(5 * S);
+gfx_drawstr("SATAN'S LITTLE PEDAL BOARD");
+gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+gfx_setfont(1, "Arial", F_SMALL);
+gfx_x = logo_x + logo_w + floor(8 * S); gfx_y = floor(24 * S);
+gfx_drawstr("all the satanic minions required to achieve your darkest most twisted musical fantasy");
+
+// --- I/O TRIM + MASTER BYPASS ---
+trim_w = floor(80 * S); trim_h = floor(14 * S);
+trim_x = gfx_w - trim_w * 2 - floor(70 * S);
+trim_y = floor(6 * S);
+_old = slider1; slider1 = draw_bar(trim_x, trim_y, trim_w, trim_h, slider1, -24, 24, "IN dB", 1);
+slider1 != _old ? slider_automate(2^0);
+_old = slider2; slider2 = draw_bar(trim_x + trim_w + floor(4 * S), trim_y, trim_w, trim_h, slider2, -24, 24, "OUT dB", 1);
+slider2 != _old ? slider_automate(2^1);
+bp_x = gfx_w - floor(60 * S); bp_y = floor(8 * S);
+_old = slider3; slider3 = draw_toggle(bp_x, bp_y, slider3);
+slider3 != _old ? slider_automate(2^2);
+gfx_r = slider3 ? COL_ACCENT_R : COL_DIM_R;
+gfx_g = slider3 ? COL_ACCENT_G : COL_DIM_G;
+gfx_b = slider3 ? COL_ACCENT_B : COL_DIM_B;
+gfx_setfont(1, "Arial", F_TINY);
+gfx_x = bp_x + floor(22 * S); gfx_y = bp_y + floor(3 * S);
+gfx_drawstr("BYPASS");
+
+// --- TUNER STRIP (full-width, prominent under header) ---
+margin = floor(6 * S); gap = floor(4 * S);
+tuner_y = hdr_h + floor(6 * S);
+tuner_h = floor(72 * S);
+tuner.lms_tuner_draw(margin, tuner_y, gfx_w - margin*2, tuner_h, S, last_cap);
+
+// --- IN COMP STRIP (horizontal, above pedal row) ---
+incomp_y = tuner_y + tuner_h + floor(6 * S);
+incomp_h = floor(38 * S);
+comp_bar_h = floor(15 * S);
+
+// IN COMP label + LED
+gfx_r = COL_PANEL_R; gfx_g = COL_PANEL_G; gfx_b = COL_PANEL_B;
+gfx_rect(margin, incomp_y, gfx_w - margin*2, incomp_h);
+gfx_r = COL_BORDER_R * 0.7; gfx_g = COL_BORDER_G * 0.7; gfx_b = COL_BORDER_B * 0.7;
+gfx_rect(margin, incomp_y, gfx_w - margin*2, 1);
+gfx_rect(margin, incomp_y + incomp_h - 1, gfx_w - margin*2, 1);
+
+_old = slider40; slider40 = draw_toggle(margin + floor(4 * S), incomp_y + floor(9 * S), slider40);
+slider40 != _old ? slider_automate(2^39);
+gfx_r = slider40 ? COL_TITLE_R : COL_SEC_R;
+gfx_g = slider40 ? COL_TITLE_G : COL_SEC_G;
+gfx_b = slider40 ? COL_TITLE_B : COL_SEC_B;
+gfx_setfont(1, "Arial", F_LABEL);
+gfx_x = margin + floor(28 * S); gfx_y = incomp_y + floor(11 * S);
+gfx_drawstr("IN COMP (FET)");
+
+// 5 bars + order selector laid out across the strip
+comp_bar_w = floor(110 * S);
+cx0 = margin + floor(140 * S);
+cy0 = incomp_y + floor(11 * S);
+_old = slider41; slider41 = draw_bar(cx0, cy0, comp_bar_w, comp_bar_h, slider41, -40, 0, "Thresh", 1);
+slider41 != _old ? slider_automate(2^40);
+_old = slider42; slider42 = draw_bar(cx0 + comp_bar_w + gap, cy0, comp_bar_w, comp_bar_h, slider42, 1, 20, "Ratio", 1);
+slider42 != _old ? slider_automate(2^41);
+_old = slider43; slider43 = draw_bar(cx0 + (comp_bar_w + gap) * 2, cy0, comp_bar_w, comp_bar_h, slider43, 0.1, 100, "Att ms", 1);
+slider43 != _old ? slider_automate(2^42);
+_old = slider44; slider44 = draw_bar(cx0 + (comp_bar_w + gap) * 3, cy0, comp_bar_w, comp_bar_h, slider44, 5, 2000, "Rel ms", 1);
+slider44 != _old ? slider_automate(2^43);
+_old = slider45; slider45 = draw_bar(cx0 + (comp_bar_w + gap) * 4, cy0, comp_bar_w, comp_bar_h, slider45, -12, 24, "Makeup", 1);
+slider45 != _old ? slider_automate(2^44);
+
+// --- CHAIN ORDER SELECTOR (narrow bar, right of IN COMP) ---
+order_y = incomp_y + incomp_h + floor(4 * S);
+order_h = floor(18 * S);
+gfx_r = COL_PANEL_HI_R; gfx_g = COL_PANEL_HI_G; gfx_b = COL_PANEL_HI_B;
+gfx_rect(margin, order_y, gfx_w - margin*2, order_h);
+gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+gfx_rect(margin, order_y, gfx_w - margin*2, 1);
+gfx_rect(margin, order_y + order_h - 1, gfx_w - margin*2, 1);
+
+gfx_r = COL_SEC_R; gfx_g = COL_SEC_G; gfx_b = COL_SEC_B;
+gfx_setfont(1, "Arial", F_TINY);
+gfx_x = margin + floor(6 * S); gfx_y = order_y + floor((order_h - F_TINY) / 2);
+gfx_drawstr("SECTION FLOW:");
+
+// Clickable order label — describes SECTION order, not individual pedals.
+// 12 STEPPER is always pre-chain (tracks cleanest on raw input).
+gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+gfx_x = margin + floor(100 * S);
+slider36 == 0 ? gfx_drawstr("CLASSIC         12S > DIST > MOD > DELAY > REVERB > EQ");
+slider36 == 1 ? gfx_drawstr("PRE-EQ DRIVE    12S > EQ > DIST > MOD > DELAY > REVERB");
+slider36 == 2 ? gfx_drawstr("MOD > DRIVE     12S > MOD > DIST > DELAY > REVERB > EQ");
+slider36 == 3 ? gfx_drawstr("ECHO > DRIVE    12S > DELAY > DIST > MOD > REVERB > EQ");
+slider36 == 4 ? gfx_drawstr("VERB > DRIVE    12S > REVERB > DIST > MOD > DELAY > EQ");
+slider36 == 5 ? gfx_drawstr("LOOP            12S > DIST > EQ > MOD > DELAY > REVERB");
+
+// L-click = next, R-click = prev
+_old = slider36;
+(mouse_cap & 1) && !(last_cap & 1) &&
+  mouse_x >= margin && mouse_x <= gfx_w - margin &&
+  mouse_y >= order_y && mouse_y <= order_y + order_h ? (
+    slider36 = (slider36 + 1) % 6;
+);
+(mouse_cap & 2) && !(last_cap & 2) &&
+  mouse_x >= margin && mouse_x <= gfx_w - margin &&
+  mouse_y >= order_y && mouse_y <= order_y + order_h ? (
+    slider36 = slider36 - 1; slider36 < 0 ? slider36 = 5;
+);
+slider36 != _old ? slider_automate(2^35);
+
+// --- PEDAL PANEL LAYOUT — grouped by section ---
+// Left-to-right: [PITCH] [DISTORTION] [MODULATION] [DELAY] [REVERB] [EQ]
+// Same-section panels are adjacent with a small `gap`; section boundaries use
+// a wider `sec_gap` plus a colored header strip above each group.
+sec_gap = floor(16 * S);
+sec_hdr_h = floor(14 * S);
+sec_hdr_y = order_y + order_h + floor(6 * S);
+body_y = sec_hdr_y + sec_hdr_h + floor(4 * S);
+// 11 panels, 5 inter-panel gaps (4 inside DIST + 1 inside MOD), 5 section boundaries
+panel_w = floor((gfx_w - margin * 2 - gap * 5 - sec_gap * 5) / 11);
+panel_h = floor(260 * S);
+bar_h = floor(16 * S); bar_sp = floor(20 * S); pad = floor(5 * S);
+
+// Panel x-positions (left-to-right in section order)
+px_12s = margin;
+px_kl  = px_12s + panel_w + sec_gap;   // DIST starts (Klon first — transparent boost)
+px_gs  = px_kl  + panel_w + gap;
+px_hwi = px_gs  + panel_w + gap;
+px_doa = px_hwi + panel_w + gap;
+px_ma  = px_doa + panel_w + gap;
+px_bm  = px_ma  + panel_w + sec_gap;   // MOD starts
+px_pw  = px_bm  + panel_w + gap;
+px_el  = px_pw  + panel_w + sec_gap;   // DELAY
+px_ub  = px_el  + panel_w + sec_gap;   // REVERB
+px_jd  = px_ub  + panel_w + sec_gap;   // EQ
+
+// --- SECTION HEADER STRIPS ---
+// Each group gets a short colored bar + label above its panels.
+function draw_section_header(sx, sy, sw, label, r, g, b)
+  local(_tw, _th) (
+  // Filled tint bar
+  gfx_r = r * 0.30; gfx_g = g * 0.30; gfx_b = b * 0.30;
+  gfx_rect(sx, sy, sw, sec_hdr_h);
+  // Top + bottom accent lines
+  gfx_r = r; gfx_g = g; gfx_b = b;
+  gfx_rect(sx, sy, sw, 1);
+  gfx_rect(sx, sy + sec_hdr_h - 1, sw, 1);
+  // Centered label
+  gfx_setfont(1, "Arial", F_TINY);
+  gfx_measurestr(label, _tw, _th);
+  gfx_x = sx + floor((sw - _tw) / 2);
+  gfx_y = sy + floor((sec_hdr_h - _th) / 2);
+  gfx_drawstr(label);
+);
+
+draw_section_header(px_12s, sec_hdr_y, panel_w,                              "PITCH",      0.70, 0.40, 0.95);
+draw_section_header(px_kl,  sec_hdr_y, (px_ma + panel_w) - px_kl,            "DISTORTION", 0.95, 0.45, 0.15);
+draw_section_header(px_bm,  sec_hdr_y, (px_pw + panel_w) - px_bm,            "MODULATION", 0.90, 0.25, 0.45);
+draw_section_header(px_el,  sec_hdr_y, panel_w,                              "DELAY",      0.30, 0.65, 0.85);
+draw_section_header(px_ub,  sec_hdr_y, panel_w,                              "REVERB",     0.30, 0.85, 0.45);
+draw_section_header(px_jd,  sec_hdr_y, panel_w,                              "EQ",         0.95, 0.75, 0.30);
+
+// --- 1. 12 STEPPER (PITCH) ---
+px = px_12s;
+draw_panel(px, body_y, panel_w, panel_h, "12 STEPPER", slider37);
+_old = slider37; slider37 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider37);
+slider37 != _old ? slider_automate(2^36);
+cy = body_y + floor(28 * S);
+_old = slider61; slider61 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider61, 0, 100, "Dry", 1);
+cy += bar_sp;
+_old = slider62; slider62 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider62, 0, 100, "Oct -12", 1);
+cy += bar_sp;
+_old = slider63; slider63 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider63, 0, 100, "Oct -24", 1);
+cy += bar_sp;
+_old = slider64; slider64 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider64, 0, 100, "Oct +12", 1);
+
+// --- 2. GOLDEN CALF (DISTORTION — Klon Centaur) ---
+px = px_kl;
+draw_panel(px, body_y, panel_w, panel_h, "GOLDEN CALF", slider46);
+_old = slider46; slider46 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider46);
+slider46 != _old ? slider_automate(2^45);
+cy = body_y + floor(28 * S);
+_old = slider47; slider47 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider47, 0, 100, "Drive", 1);
+cy += bar_sp;
+_old = slider48; slider48 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider48, 0, 100, "Treble", 1);
+cy += bar_sp;
+_old = slider49; slider49 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider49, 0, 100, "Level", 1);
+
+// --- 3. GREEN SIN (DISTORTION — Tube Screamer) ---
+px = px_gs;
+draw_panel(px, body_y, panel_w, panel_h, "GREEN SIN", slider38);
+_old = slider38; slider38 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider38);
+slider38 != _old ? slider_automate(2^37);
+cy = body_y + floor(28 * S);
+_old = slider66; slider66 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider66, 0, 100, "Drive", 1);
+cy += bar_sp;
+_old = slider67; slider67 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider67, 0, 100, "Tone", 1);
+cy += bar_sp;
+_old = slider68; slider68 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider68, 0, 100, "Level", 1);
+
+// --- 3. HARDWARE INCOMPATIBLE (DISTORTION — BD-2) ---
+px = px_hwi;
+draw_panel(px, body_y, panel_w, panel_h, "HWARE INCMPT", slider10);
+_old = slider10; slider10 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider10);
+slider10 != _old ? slider_automate(2^9);
+cy = body_y + floor(28 * S);
+_old = slider11; slider11 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider11, 0, 100, "Drive", 1);
+slider11 != _old ? slider_automate(2^10); cy += bar_sp;
+_old = slider12; slider12 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider12, 0, 100, "Tone", 1);
+slider12 != _old ? slider_automate(2^11); cy += bar_sp;
+_old = slider13; slider13 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider13, 0, 100, "Level", 1);
+slider13 != _old ? slider_automate(2^12); cy += bar_sp;
+_old = slider14; slider14 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider14, 0, 100, "Tight", 1);
+slider14 != _old ? slider_automate(2^13);
+
+// --- 4. DOA666 (DISTORTION — ODB-3) ---
+px = px_doa;
+draw_panel(px, body_y, panel_w, panel_h, "DOA666", slider5);
+_old = slider5; slider5 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider5);
+slider5 != _old ? slider_automate(2^4);
+cy = body_y + floor(28 * S);
+_old = slider6; slider6 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider6, 0, 100, "Drive", 1);
+slider6 != _old ? slider_automate(2^5); cy += bar_sp;
+_old = slider7; slider7 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider7, 0, 100, "Blend", 1);
+slider7 != _old ? slider_automate(2^6); cy += bar_sp;
+_old = slider8; slider8 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider8, 0, 100, "Low", 1);
+slider8 != _old ? slider_automate(2^7); cy += bar_sp;
+_old = slider9; slider9 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider9, 0, 100, "High", 1);
+slider9 != _old ? slider_automate(2^8);
+
+// --- 5. MARMOT (DISTORTION — RAT) ---
+px = px_ma;
+draw_panel(px, body_y, panel_w, panel_h, "MARMOT", slider4);
+_old = slider4; slider4 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider4);
+slider4 != _old ? slider_automate(2^3);
+cy = body_y + floor(28 * S);
+_old = slider57; slider57 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider57, 0, 100, "Drive", 1);
+cy += bar_sp;
+_old = slider58; slider58 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider58, 0, 100, "Tone", 1);
+cy += bar_sp;
+_old = slider59; slider59 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider59, 0, 100, "Level", 1);
+
+// --- 6. BLACK MASS (MODULATION — Chorus) ---
+px = px_bm;
+draw_panel(px, body_y, panel_w, panel_h, "BLACK MASS", slider15);
+_old = slider15; slider15 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider15);
+slider15 != _old ? slider_automate(2^14);
+cy = body_y + floor(28 * S);
+_old = slider16; slider16 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider16, 0, 100, "Rate", 1);
+slider16 != _old ? slider_automate(2^15); cy += bar_sp;
+_old = slider17; slider17 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider17, 0, 100, "Depth", 1);
+slider17 != _old ? slider_automate(2^16); cy += bar_sp;
+_old = slider18; slider18 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider18, 0, 100, "Mix", 1);
+slider18 != _old ? slider_automate(2^17); cy += bar_sp;
+_old = slider19; slider19 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider19, 0, 100, "Tone", 1);
+slider19 != _old ? slider_automate(2^18);
+
+// --- 7. PIPEWORKS (MODULATION — Flanger) ---
+px = px_pw;
+draw_panel(px, body_y, panel_w, panel_h, "PIPEWORKS", slider26);
+_old = slider26; slider26 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider26);
+slider26 != _old ? slider_automate(2^25);
+cy = body_y + floor(28 * S);
+_old = slider27; slider27 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider27, 0, 100, "Rate", 1);
+slider27 != _old ? slider_automate(2^26); cy += bar_sp;
+_old = slider28; slider28 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider28, 0, 100, "Depth", 1);
+slider28 != _old ? slider_automate(2^27); cy += bar_sp;
+_old = slider29; slider29 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider29, -95, 95, "Fbk", 1);
+slider29 != _old ? slider_automate(2^28); cy += bar_sp;
+_old = slider30; slider30 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider30, 0, 100, "Manual", 1);
+slider30 != _old ? slider_automate(2^29); cy += bar_sp;
+_old = slider31; slider31 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider31, 0, 100, "Mix", 1);
+slider31 != _old ? slider_automate(2^30);
+
+// --- 8. THE ELEPHANT (DELAY — Memory Boy) ---
+px = px_el;
+draw_panel(px, body_y, panel_w, panel_h, "THE ELEPHANT", slider20);
+_old = slider20; slider20 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider20);
+slider20 != _old ? slider_automate(2^19);
+cy = body_y + floor(28 * S);
+_old = slider21; slider21 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider21, 30, 600, "Delay ms", 1);
+slider21 != _old ? slider_automate(2^20); cy += bar_sp;
+_old = slider22; slider22 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider22, 0, 90, "Feedbk", 1);
+slider22 != _old ? slider_automate(2^21); cy += bar_sp;
+_old = slider23; slider23 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider23, 0, 100, "Blend", 1);
+slider23 != _old ? slider_automate(2^22); cy += bar_sp;
+_old = slider24; slider24 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider24, 0, 100, "Ch Dep", 1);
+slider24 != _old ? slider_automate(2^23); cy += bar_sp;
+_old = slider25; slider25 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider25, 0, 100, "Ch Rate", 1);
+slider25 != _old ? slider_automate(2^24);
+
+// --- 9. UNHOLY BOWL (REVERB) ---
+px = px_ub;
+draw_panel(px, body_y, panel_w, panel_h, "UNHOLY BOWL", slider32);
+_old = slider32; slider32 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider32);
+slider32 != _old ? slider_automate(2^31);
+cy = body_y + floor(28 * S);
+_old = slider33; slider33 = draw_mode_sel(px + pad, cy, panel_w - pad*2, bar_h, slider33, 2, "Mode", "SPRG", "HALL", "FLERB");
+slider33 != _old ? slider_automate(2^32); cy += bar_sp;
+_old = slider34; slider34 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider34, 0, 100, "Amount", 1);
+slider34 != _old ? slider_automate(2^33); cy += bar_sp;
+_old = slider35; slider35 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider35, 0, 100, "Tone", 1);
+slider35 != _old ? slider_automate(2^34);
+
+// --- 10. JUDGEMENT DAY (EQ — Parametric) ---
+px = px_jd;
+draw_panel(px, body_y, panel_w, panel_h, "JUDGEMENT DAY", slider39);
+_old = slider39; slider39 = draw_toggle(px + panel_w - floor(26 * S), body_y + floor(3 * S), slider39);
+slider39 != _old ? slider_automate(2^38);
+cy = body_y + floor(28 * S);
+// Mode is a 4-way click cycle — draw_mode_sel only handles 3, so do it inline
+gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+gfx_rect(px + pad, cy, panel_w - pad*2, bar_h);
+gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+gfx_rect(px + pad, cy, panel_w - pad*2, 1); gfx_rect(px + pad, cy + bar_h - 1, panel_w - pad*2, 1);
+gfx_rect(px + pad, cy, 1, bar_h); gfx_rect(px + pad + panel_w - pad*2 - 1, cy, 1, bar_h);
+gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+gfx_setfont(1, "Arial", F_TINY);
+gfx_x = px + pad + floor(4 * S); gfx_y = cy + floor((bar_h - F_TINY) / 2);
+gfx_drawstr("Mode");
+gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+gfx_x = px + pad + panel_w - pad*2 - floor(50 * S); gfx_y = cy + floor((bar_h - F_TINY) / 2);
+slider71 == 0 ? gfx_drawstr("PUNK")  :
+slider71 == 1 ? gfx_drawstr("JAZZ")  :
+slider71 == 2 ? gfx_drawstr("METAL") :
+                gfx_drawstr("FLAT");
+_old = slider71;
+(mouse_cap & 1) && !(last_cap & 1) &&
+  mouse_x >= px + pad && mouse_x <= px + pad + panel_w - pad*2 &&
+  mouse_y >= cy && mouse_y <= cy + bar_h ? (
+    slider71 = (slider71 + 1) % 4;
+);
+(mouse_cap & 2) && !(last_cap & 2) &&
+  mouse_x >= px + pad && mouse_x <= px + pad + panel_w - pad*2 &&
+  mouse_y >= cy && mouse_y <= cy + bar_h ? (
+    slider71 = slider71 - 1; slider71 < 0 ? slider71 = 3;
+);
+cy += bar_sp;
+_old = slider72; slider72 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider72, -12, 12, "Low", 1);
+cy += bar_sp;
+_old = slider73; slider73 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider73, -12, 12, "Mid", 1);
+cy += bar_sp;
+_old = slider74; slider74 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider74, -12, 12, "High", 1);
+cy += bar_sp;
+_old = slider75; slider75 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider75, -12, 12, "Pres", 1);
+cy += bar_sp;
+_old = slider76; slider76 = draw_bar(px + pad, cy, panel_w - pad*2, bar_h, slider76, -12, 12, "Level", 1);
+
+// --- OUT COMP STRIP ---
+outcomp_y = body_y + panel_h + floor(8 * S);
+outcomp_h = floor(38 * S);
+
+gfx_r = COL_PANEL_R; gfx_g = COL_PANEL_G; gfx_b = COL_PANEL_B;
+gfx_rect(margin, outcomp_y, gfx_w - margin*2, outcomp_h);
+gfx_r = COL_BORDER_R * 0.7; gfx_g = COL_BORDER_G * 0.7; gfx_b = COL_BORDER_B * 0.7;
+gfx_rect(margin, outcomp_y, gfx_w - margin*2, 1);
+gfx_rect(margin, outcomp_y + outcomp_h - 1, gfx_w - margin*2, 1);
+
+_old = slider50; slider50 = draw_toggle(margin + floor(4 * S), outcomp_y + floor(9 * S), slider50);
+slider50 != _old ? slider_automate(2^49);
+gfx_r = slider50 ? COL_TITLE_R : COL_SEC_R;
+gfx_g = slider50 ? COL_TITLE_G : COL_SEC_G;
+gfx_b = slider50 ? COL_TITLE_B : COL_SEC_B;
+gfx_setfont(1, "Arial", F_LABEL);
+gfx_x = margin + floor(28 * S); gfx_y = outcomp_y + floor(11 * S);
+gfx_drawstr("OUT COMP (FET)");
+
+ocx0 = margin + floor(140 * S);
+ocy0 = outcomp_y + floor(11 * S);
+_old = slider51; slider51 = draw_bar(ocx0, ocy0, comp_bar_w, comp_bar_h, slider51, -40, 0, "Thresh", 1);
+slider51 != _old ? slider_automate(2^50);
+_old = slider52; slider52 = draw_bar(ocx0 + comp_bar_w + gap, ocy0, comp_bar_w, comp_bar_h, slider52, 1, 20, "Ratio", 1);
+slider52 != _old ? slider_automate(2^51);
+_old = slider53; slider53 = draw_bar(ocx0 + (comp_bar_w + gap) * 2, ocy0, comp_bar_w, comp_bar_h, slider53, 0.1, 100, "Att ms", 1);
+slider53 != _old ? slider_automate(2^52);
+_old = slider54; slider54 = draw_bar(ocx0 + (comp_bar_w + gap) * 3, ocy0, comp_bar_w, comp_bar_h, slider54, 5, 2000, "Rel ms", 1);
+_old = slider55; slider55 = draw_bar(ocx0 + (comp_bar_w + gap) * 4, ocy0, comp_bar_w, comp_bar_h, slider55, -12, 24, "Makeup", 1);
+
+last_cap = mouse_cap;
+
+// BUY + NOTICE
+notice_btn_x = gfx_w - floor(60 * S);
+notice_btn_y = gfx_h - floor(20 * S);
+buy_btn_x = notice_btn_x - floor(50 * S);
+buy_btn_y = notice_btn_y;
+gfx_r = 0.6; gfx_g = 0.5; gfx_b = 0.3;
+gfx_rect(buy_btn_x, buy_btn_y, floor(45 * S), floor(15 * S));
+gfx_r = 0; gfx_g = 0; gfx_b = 0;
+gfx_x = buy_btn_x + floor(4 * S); gfx_y = buy_btn_y + floor(2 * S);
+gfx_drawstr("BUY");
+(mouse_cap & 1) && mouse_x >= buy_btn_x && mouse_x <= buy_btn_x + floor(45 * S) && mouse_y >= buy_btn_y && mouse_y <= buy_btn_y + floor(15 * S) && !buy_clicked ? (
+  buy_show = !buy_show; buy_show ? notice_show = 0; buy_clicked = 1;
+);
+!(mouse_cap & 1) ? buy_clicked = 0;
+gfx_r = 0.6; gfx_g = 0.5; gfx_b = 0.3;
+gfx_rect(notice_btn_x, notice_btn_y, floor(55 * S), floor(15 * S));
+gfx_r = 0; gfx_g = 0; gfx_b = 0;
+gfx_x = notice_btn_x + floor(4 * S); gfx_y = notice_btn_y + floor(2 * S);
+gfx_drawstr("NOTICE");
+(mouse_cap & 1) && mouse_x >= notice_btn_x && mouse_x <= notice_btn_x + floor(55 * S) && mouse_y >= notice_btn_y && mouse_y <= notice_btn_y + floor(15 * S) && !notice_clicked ? (
+  notice_show = !notice_show; notice_show ? buy_show = 0; notice_clicked = 1;
+);
+!(mouse_cap & 1) ? notice_clicked = 0;
+
+
+// ============================================================
+//  @SERIALIZE
+// ============================================================
+@serialize
+file_var(0, bc.bc_ser_compat_1);
+file_var(0, bc.bc_ser_compat_2);
+file_var(0, tuner.on);

@@ -1,0 +1,700 @@
+desc:LMS - Ol Reliable v2 (Density-Aware EL84 Class A)
+//tags: amp guitar el84 class-a density-aware
+//author: LMS
+//version: 1.1
+//license: GPL-3.0
+filename:0,shakebot_logo.png
+
+import lms_core.jsfx-inc
+
+in_pin:Input L
+in_pin:Input R
+out_pin:Output L
+out_pin:Output R
+
+slider1:-12<-24,24,0.1>-Input Level (dB)
+slider2:50<0,100,0.1>-Gain (%)
+slider3:0<0,2,1{Normal,Top Boost,Jumped}>-Channel
+slider24:50<0,100,1>-Jump Mix (%)
+slider4:50<0,100,1>-Bass (%)
+slider5:50<0,100,1>-Treble (%)
+slider6:50<0,100,1>-Tone Cut (%)
+slider7:50<0,100,1>-Master (%)
+slider8:50<0,100,1>-Input Stage (%)
+slider9:50<0,100,1>-PSU Sag (%)
+slider10:-12<-24,24,0.1>-Output Level (dB)
+slider11:0<0,1,1{Off,On}>-FX Bypass
+// --- TREMOLO (bias wobble on EL84s) ---
+slider12:0<0,100,1>-Tremolo Depth (%)
+slider13:50<0,100,1>-Tremolo Speed (%)
+// --- SPRING REVERB ---
+slider14:0<0,100,1>-Spring Reverb (%)
+// --- TAPE ECHO ---
+slider21:0<0,100,1>-Tape Echo Mix (%)
+slider22:50<0,100,1>-Echo Time (%)
+slider23:40<0,100,1>-Echo Feedback (%)
+// --- CABINET ---
+slider15:3<0,11,1{Off,1x12 Greenback,1x12 Jensen,1x12 Blue,2x12 Jensen,4x12 G12T-75,4x12 V30,8x10 Sealed,4x12 Sheffield,1x15 Open,4x10 Sealed,4x12 Closed}>-Cabinet
+slider16:1<0,1,1{Off,On}>-Cab Sim
+slider17:0<0,100,1>-Mic Distance (%)
+// --- CABINET B ---
+slider18:0<0,11,1{Off,1x12 Greenback,1x12 Jensen,1x12 Blue,2x12 Jensen,4x12 G12T-75,4x12 V30,8x10 Sealed,4x12 Sheffield,1x15 Open,4x10 Sealed,4x12 Closed}>-Cabinet B
+slider19:0<0,100,1>-Mic B Distance (%)
+// --- SPEAKER BREAKUP ---
+slider25:100<0,100,1>-Speaker Breakup (%)
+// --- BRIGHT ---
+slider26:0<0,1,1{Off,On}>-Bright
+// --- IMPEDANCE TAP ---
+slider20:2<0,2,1{4 ohm,8 ohm,16 ohm}>-Impedance Tap
+
+@init
+
+
+function poweramp_set(drive, tonecut) local(tc_freq) (
+  this.drive = drive;
+  tc_freq = 20000 - tonecut * 18000;
+  tc_freq = max(2000, tc_freq);
+  this.tonecut.lms_bq_set_lp(tc_freq, 0.5);
+);
+// === INIT ===
+inp.lms_input_stage_init(4500, 0.6, 1200, -2.0, 0.030);
+input_hp.lms_bq_init();
+input_hp.lms_bq_set_hp(80, 0.7);
+
+// EF86 pentode preamp — THE DEFINING STAGE of the AC15
+// Miller at 9kHz — EF86 has less Miller capacitance than 12AX7
+ef86.lms_triode_init(30, 9000, 5000, 250, 2000, 5000);
+
+// 12AX7 second stage (Top Boost channel only)
+v1.lms_triode_init(30, 7500, 5000, 250, 2000, 5000);
+
+// v1.1: Cathodyne (concertina) phase inverter
+// Wider bandwidth than LTP (Marshall), more HF = Vox shimmer
+// The cathodyne inherently clips asymmetrically: plate clips harder than cathode
+pi.lms_triode_init(20, 9000, 5000, 250, 2000, 5000);
+
+// v1.1: Interstage coupling cap HP — 0.01uF × 100k = 160Hz
+// Real AC15 has SMALLER coupling caps than Marshall (0.01uF vs 0.022uF)
+// This is THE reason AC15s have tight bass despite open-back cab
+coupling_hp.lms_bq_init();
+coupling_hp.lms_bq_set_hp(160, 0.7);
+
+psu.lms_psu_init(0.001, 0.100, 0.20, 0.65, 1.0);
+tb.lms_topboost_init();
+tb.lms_topboost_set(0.5, 0.5);
+pa.lms_pp_pa_init(3.0, 1.6, 1.5, 0.85);
+pa.lms_pp_pa_cathode(0.010, 0.200, 0.15);
+pa.lms_pp_pa_xfmr(3.5, 0.986, 1.2, 0.25);
+pa.lms_pp_pa_xfmr_res(4000, 2.0, 2.0);
+pa.lms_pp_pa_hyst(0.12);
+pa.tonecut.lms_bq_init();
+pa.tonecut.lms_bq_set_lp(20000, 0.5);
+pa.poweramp_set(0.5, 0.5);
+gate.lms_sgate_init(0.001, 0.0002);
+trem.lms_trem_init();
+spring.lms_spring_init();
+echo.lms_tape_echo_init();
+trem_depth = 0; trem_speed = 0.5;
+spring_mix = 0;
+echo_mix = 0; echo_time = 0.5; echo_feedback = 0.4;
+screen_compress = 0;
+
+// Cabinet simulation (shared presets from core)
+lms_cab_table_init();
+cab.lms_cab_init();
+cab.lms_cab_set(3);  // default: 1x12 Alnico Blue
+cab_type = 3;
+cab_on = 1;
+cab2.lms_cab_init();
+cab2.lms_cab_set(0);
+cab2_type = 0;
+cab_dual = 0;
+cab_b_solo = 0;
+
+// Impedance interaction — AC15 rear panel tap (4/8/16 ohm)
+amp_designed_ohms = 16;  // default: 16 ohm tap
+ohm_ratio = 1.0;
+ohm_sag_mult = 1.0;
+ohm_vol = 1.0;
+ohm_lo_gain = 0;
+ohm_lo.lms_bq_init();
+cab_load_ohms = 16;
+
+bright_cap.lms_bq_init();
+bright_cap.lms_bq_set_hishelf(2000, 4.0, 0.7);
+bright_on = 0;
+
+gain = 0.5; in_level = 1; out_level = 1; master = 0.5;
+channel = 0; input_intensity = 0.5; sag_depth = 0.5; jump_mix = 0.5;
+tonecut = 0.5;
+fx_bypass = 0;
+
+// Density matrix animation state (128 cells for 16x8 grid)
+DM_CELLS = 90000;
+memset(DM_CELLS, 0, 128);
+dm_frame = 0;
+d_env_lo = 0; d_env_mid = 0; d_env_hi = 0; d_env_air = 0;
+d_density = 1.0; d_mid_d = 0; d_hi_d = 0; d_air_d = 0;
+d_miller_freq = 9000; d_miller_q = 0.6; d_grid_cond = 0;
+d_drive_boost = 1.0; d_bplus = 1.0;
+
+  notice_show = 0;
+
+@slider
+in_level = 10 ^ (slider1 / 20);
+gain = slider2 / 100;
+channel = slider3;
+jump_mix = slider24 / 100;
+tb.lms_topboost_set(slider4/100, slider5/100);
+tonecut = slider6 / 100;
+master = slider7 / 100;
+pa.poweramp_set(master, tonecut);
+input_intensity = slider8 / 100;
+sag_depth = slider9 / 100;
+out_level = 10 ^ (slider10 / 20);
+fx_bypass = slider11;
+trem_depth = slider12 / 100;
+trem_speed = slider13 / 100;
+spring_mix = slider14 / 100;
+echo_mix = slider21 / 100;
+echo_time = slider22 / 100;
+echo_feedback = slider23 / 100;
+cab_type = slider15;
+cab_on = slider16;
+cab.lms_cab_set(cab_on ? cab_type : 0);
+cab_mic = slider17;
+cab.lms_cab_set_mic(cab_mic);
+cab2_type = slider18;
+cab2.lms_cab_set(cab_on ? cab2_type : 0);
+cab2_mic = slider19;
+cab2.lms_cab_set_mic(cab2_mic);
+cab_dual = cab_on && cab_type > 0 && cab2_type > 0;
+cab_b_solo = cab_on && cab_type == 0 && cab2_type > 0;
+cab.cab_breakup_amt = slider25 / 100;
+cab2.cab_breakup_amt = slider25 / 100;
+bright_on = slider26;
+
+// Impedance interaction — rear panel tap + load mismatch
+amp_designed_ohms = slider20 == 0 ? 4 : slider20 == 1 ? 8 : 16;
+cab_a_ohms = lms_cab_get_ohms(cab_on ? cab_type : 0);
+cab_b_ohms = lms_cab_get_ohms(cab_on ? cab2_type : 0);
+cab_load_ohms = lms_cab_compute_load(cab_a_ohms, cab_b_ohms);
+cab_load_ohms > 0 ? (
+  ohm_ratio = cab_load_ohms / amp_designed_ohms;
+  ohm_ratio = max(0.25, min(4.0, ohm_ratio));
+  ohm_sag_mult = 1.0 / ohm_ratio;
+  ohm_sag_mult = max(0.5, min(2.5, ohm_sag_mult));
+  ohm_vol = 1.0 / sqrt(ohm_ratio);
+  ohm_vol = max(0.5, min(1.6, ohm_vol));
+  ohm_lo_gain = (1.0 - ohm_ratio) * 3.0;
+  ohm_lo_gain = max(-4.0, min(4.0, ohm_lo_gain));
+  abs(ohm_lo_gain) > 0.2 ? (
+    ohm_lo.lms_bq_set_loshelf(120, ohm_lo_gain, 0.7);
+  ) : (
+    ohm_lo.lms_bq_init();
+  );
+) : (
+  ohm_sag_mult = 1.0;
+  ohm_vol = 1.0;
+  ohm_lo.lms_bq_init();
+);
+// ============================================================
+// @BLOCK — Broadcast, heartbeat, stale-check, follow, steal
+// ============================================================
+@block
+// ---- Recalculate from sliders (GFX changes don't trigger @slider) ----
+in_level = 10 ^ (slider1 / 20);
+gain = slider2 / 100;
+channel = slider3;
+jump_mix = slider24 / 100;
+tb.lms_topboost_set(slider4/100, slider5/100);
+tonecut = slider6 / 100;
+master = slider7 / 100;
+pa.poweramp_set(master, tonecut);
+input_intensity = slider8 / 100;
+sag_depth = slider9 / 100;
+out_level = 10 ^ (slider10 / 20);
+fx_bypass = slider11;
+trem_depth = slider12 / 100;
+trem_speed = slider13 / 100;
+spring_mix = slider14 / 100;
+echo_mix = slider21 / 100;
+echo_time = slider22 / 100;
+echo_feedback = slider23 / 100;
+cab_type = slider15;
+cab_on = slider16;
+cab.lms_cab_set(cab_on ? cab_type : 0);
+cab_mic = slider17;
+cab.lms_cab_set_mic(cab_mic);
+cab2_type = slider18;
+cab2.lms_cab_set(cab_on ? cab2_type : 0);
+cab2_mic = slider19;
+cab2.lms_cab_set_mic(cab2_mic);
+cab_dual = cab_on && cab_type > 0 && cab2_type > 0;
+cab_b_solo = cab_on && cab_type == 0 && cab2_type > 0;
+cab.cab_breakup_amt = slider25 / 100;
+cab2.cab_breakup_amt = slider25 / 100;
+bright_on = slider26;
+
+// Impedance interaction — rear panel tap + load mismatch
+amp_designed_ohms = slider20 == 0 ? 4 : slider20 == 1 ? 8 : 16;
+cab_a_ohms = lms_cab_get_ohms(cab_on ? cab_type : 0);
+cab_b_ohms = lms_cab_get_ohms(cab_on ? cab2_type : 0);
+cab_load_ohms = lms_cab_compute_load(cab_a_ohms, cab_b_ohms);
+cab_load_ohms > 0 ? (
+  ohm_ratio = cab_load_ohms / amp_designed_ohms;
+  ohm_ratio = max(0.25, min(4.0, ohm_ratio));
+  ohm_sag_mult = 1.0 / ohm_ratio;
+  ohm_sag_mult = max(0.5, min(2.5, ohm_sag_mult));
+  ohm_vol = 1.0 / sqrt(ohm_ratio);
+  ohm_vol = max(0.5, min(1.6, ohm_vol));
+  ohm_lo_gain = (1.0 - ohm_ratio) * 3.0;
+  ohm_lo_gain = max(-4.0, min(4.0, ohm_lo_gain));
+  abs(ohm_lo_gain) > 0.2 ? (
+    ohm_lo.lms_bq_set_loshelf(120, ohm_lo_gain, 0.7);
+  ) : (
+    ohm_lo.lms_bq_init();
+  );
+) : (
+  ohm_sag_mult = 1.0;
+  ohm_vol = 1.0;
+  ohm_lo.lms_bq_init();
+);
+
+
+@sample
+
+mono = (spl0 + spl1) * 0.5 * in_level;
+// Input clamp — catches record-arm spikes before the amp sees them
+mono = max(-1.0, min(1.0, mono));
+
+// 1. Input stage (EF86 pentode grid physics)
+input_intensity > 0.0 ? (
+  mono = inp.lms_input_stage_proc(mono, input_intensity);
+);
+
+// 2. Input coupling cap
+mono = input_hp.lms_bq_proc(mono);
+
+// 2b. Bright cap — Vox Brilliant channel treble boost
+bright_on ? ( mono = bright_cap.lms_bq_proc(mono); );
+
+// 3. PSU sag (shared rail)
+bplus = psu.lms_psu_proc(abs(mono) * (1.0 + gain * 2.0), sag_depth * ohm_sag_mult);
+
+// 3b. v1.1: EF86 screen grid compression — pentode positive peak soft knee
+// Screen grid current increases as signal approaches plate saturation
+// Creates the "glassy" ceiling that's different from triode grid conduction
+// Applied BEFORE ef86.triode_proc — shapes what the EF86 sees
+ef86_drive = gain * 0.45;
+ef86_in = mono;
+screen_compress = 0;
+ef86_in > 0.6 * bplus ? (
+  screen_compress = ef86_in - (0.6 * bplus + lms_tanh((ef86_in - 0.6 * bplus) * 3.0) * 0.15 * bplus);
+  ef86_in = 0.6 * bplus + lms_tanh((ef86_in - 0.6 * bplus) * 3.0) * 0.15 * bplus;
+);
+
+// 4. EF86 pentode preamp — the defining sound
+ef86_out = ef86.lms_triode_proc(ef86_in, ef86_drive, bplus,
+  1.0,   // pos_hard: linear at clean, soft compress near ceiling
+  1.4,   // neg_hard: pentode cutoff only at high drive (not at clean!)
+  0.95,  // pos_ceil: pentode has massive plate headroom
+  0.80,  // neg_ceil: cutoff ceiling — lower than pos but not at whisper levels
+  0.55,  // gc_thresh: EF86 grid is far from signal in normal operation
+  0.08   // gc_amount
+);
+
+// 4b. v1.1: Interstage coupling cap — 0.01uF × 100k = 160Hz HP
+// Tighter bass than Marshall (0.022uF). Applied to both channels.
+ef86_out = coupling_hp.lms_bq_proc(ef86_out);
+
+// 5. Channel routing: Normal, Top Boost, or Jumped
+channel == 0 ? (
+  // Normal: EF86 straight to tone stack (no 12AX7 second stage)
+  amp_out = ef86_out;
+) : channel == 1 ? (
+  // Top Boost: EF86 → 12AX7 → tone stack
+  v1_drive = gain * 0.45;
+  amp_out = v1.lms_triode_proc(ef86_out, v1_drive, bplus, 1.3, 1.1, 0.80, 0.95, 0.30, 0.15);
+) : (
+  // Jumped: both paths run, passive resistive mix at PI grid
+  jump_normal = ef86_out;
+  v1_drive = gain * 0.45;
+  jump_tb = v1.lms_triode_proc(ef86_out, v1_drive, bplus, 1.3, 1.1, 0.80, 0.95, 0.30, 0.15);
+  // Passive resistive mix — plate resistors form a voltage divider
+  // Mixing two signals through resistors attenuates ~6dB (0.7x)
+  amp_out = (jump_normal * (1.0 - jump_mix) + jump_tb * jump_mix) * 0.7;
+);
+// Tone stack — all channels
+amp_out = tb.lms_topboost_proc(amp_out);
+
+amp_out *= 1.0 + gain * 5.0;
+
+// 5b. v1.1: Cathodyne phase inverter — THE Vox bloom
+// At low master: transparent. At high master: asymmetric clipping = harmonic bloom
+// Cathodyne: plate clips harder (1.0) than cathode (0.85) = inherent asymmetry
+pi_drive = master * 0.40;
+amp_out = pi.lms_triode_proc(amp_out, pi_drive, bplus, 1.0, 0.85, 0.85, 0.90, 0.45, 0.08);
+
+// 6. Effects loop (pre-power-amp — signal returns through EL84s + cab)
+fx_bypass == 0 ? (
+  // Tremolo (bias wobble)
+  trem_depth > 0 ? (
+    amp_out = trem.lms_trem_proc(amp_out, trem_depth, trem_speed);
+  );
+  // Spring reverb
+  spring_mix > 0 ? (
+    amp_out = spring.lms_spring_proc(amp_out, spring_mix);
+  );
+  // Tape echo
+  echo_mix > 0 ? (
+    amp_out = echo.lms_tape_echo_proc(amp_out, echo_mix, echo_time, echo_feedback);
+  );
+  // Safety clamp — catches runaway feedback before it hits power tubes
+  amp_out = max(-0.95, min(0.95, amp_out));
+);
+
+// 7. Power amp (EL84 cathode-biased push-pull, NO NFB)
+//    v1.1: Now includes output transformer saturation + winding resonance
+amp_out *= master;
+amp_out = pa.lms_pp_pa_proc(amp_out, bplus);
+
+amp_out = pa.tonecut.lms_bq_proc(amp_out);
+
+// 8. Soft gate
+amp_out = gate.lms_sgate_proc(amp_out);
+
+// 9. Impedance interaction — power delivery + damping factor
+amp_out *= ohm_vol;                       // lower load = more power = louder
+amp_out = ohm_lo.lms_bq_proc(amp_out);   // lower load = less damping = looser bass
+
+// 10. Cabinet (density-aware speaker sim — dual cab mix)
+cab_dual ? (
+  cab_a_out = cab.lms_cab_proc(amp_out, ef86.hd.density);
+  cab_b_out = cab2.lms_cab_proc(amp_out, ef86.hd.density);
+  amp_out = (cab_a_out + cab_b_out) * 0.5;
+) : cab_b_solo ? (
+  amp_out = cab2.lms_cab_proc(amp_out, ef86.hd.density);
+) : (
+  amp_out = cab.lms_cab_proc(amp_out, ef86.hd.density);
+);
+
+amp_out *= out_level;
+// Brickwall output limiter — transparent safety ceiling
+amp_out = max(-0.95, min(0.95, amp_out));
+spl0 = amp_out;
+spl1 = amp_out;
+
+
+// Density state for GFX — ef86 for normal, v1 for top boost, blended for jumped
+channel == 1 || (channel == 2 && jump_mix > 0.5) ? (
+  d_env_lo  = v1.hd.env_lo;  d_env_mid = v1.hd.env_mid;
+  d_env_hi  = v1.hd.env_hi;  d_env_air = v1.hd.env_air;
+  d_density = v1.hd.density;
+  d_mid_d   = v1.hd.mid_density;  d_hi_d = v1.hd.hi_density;  d_air_d = v1.hd.air_density;
+  d_miller_freq = v1.last_miller_freq;  d_miller_q = v1.last_miller_q;
+  d_drive_boost = 1.0 + v1.hd.mid_density * 0.4;
+  d_grid_cond   = v1.peak_env;
+) : (
+  d_env_lo  = ef86.hd.env_lo;  d_env_mid = ef86.hd.env_mid;
+  d_env_hi  = ef86.hd.env_hi;  d_env_air = ef86.hd.env_air;
+  d_density = ef86.hd.density;
+  d_mid_d   = ef86.hd.mid_density;  d_hi_d = ef86.hd.hi_density;  d_air_d = ef86.hd.air_density;
+  d_miller_freq = ef86.last_miller_freq;  d_miller_q = ef86.last_miller_q;
+  d_drive_boost = 1.0 + ef86.hd.mid_density * 0.4;
+  d_grid_cond   = ef86.peak_env;
+);
+d_bplus = bplus;
+
+@gfx 600 544
+
+// ============================================================================
+//  SCALING — compute scale factor from actual window size vs nominal
+// ============================================================================
+lms_gfx_setup(600);
+
+// ============================================================================
+//  BACKGROUND
+// ============================================================================
+hdr_h = floor(44 * S);
+gfx_r = COL_BG_R; gfx_g = COL_BG_G; gfx_b = COL_BG_B;
+gfx_rect(0, 0, gfx_w, gfx_h);
+gfx_r = 0.03; gfx_g = 0.03; gfx_b = 0.05;
+gfx_rect(0, 0, gfx_w, hdr_h);
+gfx_r = COL_TITLE_R * 0.6; gfx_g = COL_TITLE_G * 0.6; gfx_b = COL_TITLE_B * 0.6;
+gfx_rect(0, hdr_h, gfx_w, max(1, floor(2 * S)));
+
+// ============================================================================
+//  LAYOUT
+// ============================================================================
+margin = floor(8 * S);
+gap = floor(6 * S);
+bar_h = floor(18 * S);
+bar_sp = floor(21 * S);
+col_w = 190;
+pad = floor(4 * S);
+pad2 = pad * 2;
+gr_bar_h = max(2, floor(6 * S));
+body_y = floor(50 * S);
+
+// ============================================================================
+//  LOGO + TITLE
+// ============================================================================
+gfx_getimgdim(0, logo_img_w, logo_img_h);
+logo_img_w > 0 ? (
+  logo_h = floor(32 * S);
+  logo_w = floor(logo_h * (logo_img_w / logo_img_h));
+  logo_x = floor(6 * S);
+  logo_y = floor(((hdr_h - logo_h)) / 2);
+  gfx_blit(0, 1, 0, 0, 0, logo_img_w, logo_img_h, logo_x, logo_y, logo_w, logo_h);
+) : (
+  logo_w = 0;
+  logo_x = 0;
+);
+gfx_r = COL_TITLE_R; gfx_g = COL_TITLE_G; gfx_b = COL_TITLE_B;
+gfx_setfont(1, "Arial", F_TITLE);
+gfx_x = logo_x + logo_w + floor(8 * S); gfx_y = floor(10 * S);
+gfx_drawstr("OL RELIABLE v2");
+gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+gfx_setfont(1, "Arial", F_LABEL);
+gfx_measurestr("Density-Aware EL84 Class A", sub_w, sub_h);
+gfx_x = gfx_w - sub_w - floor(10 * S); gfx_y = floor(10 * S);
+gfx_drawstr("Density-Aware EL84 Class A");
+
+// ============================================================================
+//  COL 1: PREAMP
+// ============================================================================
+c1x = margin;
+preamp_rows = slider3 == 2 ? 6 : 5;
+lms_draw_panel(c1x, body_y, col_w, 26 + preamp_rows * bar_sp, "PREAMP");
+cy = body_y + floor(26 * S);
+_old = slider1; slider1 = lms_draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider1, -24, 24, "Input dB", 1);
+slider1 != _old ? slider_automate(2^0);
+cy += bar_sp;
+_old = slider2; slider2 = lms_draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider2, 0, 100, "Gain", 1);
+slider2 != _old ? slider_automate(2^1);
+cy += bar_sp;
+strcpy(MS_BUF, "Normal"); strcpy(MS_BUF+1, "Top Boost"); strcpy(MS_BUF+2, "Jumped");
+_old = slider3; slider3 = lms_draw_mode_sel(c1x + pad, cy, col_w - pad2, bar_h, slider3, 2, "Channel");
+slider3 != _old ? slider_automate(2^2);
+cy += bar_sp;
+slider3 == 2 ? (
+  _old = slider24; slider24 = lms_draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider24, 0, 100, "Jump Mix", 1);
+  slider24 != _old ? slider_automate(2^23);
+  cy += bar_sp;
+);
+_old = slider8; slider8 = lms_draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider8, 0, 100, "Input Stg", 1);
+slider8 != _old ? slider_automate(2^7);
+cy += bar_sp;
+_old = slider9; slider9 = lms_draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider9, 0, 100, "PSU Sag", 1);
+slider9 != _old ? slider_automate(2^8);
+
+// ============================================================================
+//  COL 2: TONE / POWER
+// ============================================================================
+c2x = margin + col_w + gap;
+lms_draw_panel(c2x, body_y, col_w, 26 + 6 * bar_sp, "TONE / POWER");
+cy = body_y + floor(26 * S);
+_old = slider26; slider26 = lms_draw_toggle(c2x + pad, cy + 2, slider26, "Bright");
+slider26 != _old ? slider_automate(2^25);
+cy += bar_sp;
+_old = slider4; slider4 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider4, 0, 100, "Bass", 1);
+slider4 != _old ? slider_automate(2^3);
+cy += bar_sp;
+_old = slider5; slider5 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider5, 0, 100, "Treble", 1);
+slider5 != _old ? slider_automate(2^4);
+cy += bar_sp;
+_old = slider6; slider6 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider6, 0, 100, "Tone Cut", 1);
+slider6 != _old ? slider_automate(2^5);
+cy += bar_sp;
+_old = slider7; slider7 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider7, 0, 100, "Master", 1);
+slider7 != _old ? slider_automate(2^6);
+cy += bar_sp;
+_old = slider10; slider10 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider10, -24, 24, "Output dB", 1);
+slider10 != _old ? slider_automate(2^9);
+
+// ============================================================================
+//  COL 3: EFFECTS
+// ============================================================================
+c3x = margin + (col_w + gap) * 2;
+lms_draw_panel(c3x, body_y, col_w, 26 + 10 * bar_sp, "EFFECTS");
+cy = body_y + floor(26 * S);
+_old = slider11; slider11 = lms_draw_toggle(c3x + pad, cy + 2, slider11, "FX Bypass");
+slider11 != _old ? slider_automate(2^10);
+cy += bar_sp;
+_old = slider12; slider12 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider12, 0, 100, "Trem Depth", 1);
+slider12 != _old ? slider_automate(2^11);
+cy += bar_sp;
+_old = slider13; slider13 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider13, 0, 100, "Trem Speed", 1);
+slider13 != _old ? slider_automate(2^12);
+cy += bar_sp;
+_old = slider14; slider14 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider14, 0, 100, "Reverb", 1);
+slider14 != _old ? slider_automate(2^13);
+cy += bar_sp;
+_old = slider21; slider21 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider21, 0, 100, "Echo Mix", 1);
+slider21 != _old ? slider_automate(2^20);
+cy += bar_sp;
+_old = slider22; slider22 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider22, 0, 100, "Echo Time", 1);
+slider22 != _old ? slider_automate(2^21);
+cy += bar_sp;
+_old = slider23; slider23 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider23, 0, 100, "Echo FB", 1);
+slider23 != _old ? slider_automate(2^22);
+
+// ============================================================================
+//  CABINET PANEL (full width, between controls and density)
+// ============================================================================
+  p1h = 26 + 10 * bar_sp;
+  cab_panel_y = body_y + p1h + gap;
+  cab_panel_w = col_w * 3 + gap * 2;
+  cab_panel_x = margin;
+  cab_panel_h = floor(180 * S);
+  lms_draw_panel(cab_panel_x, cab_panel_y, cab_panel_w, cab_panel_h, "CABINET");
+  cab_cy = cab_panel_y + floor(26 * S);
+  cab_cw = floor(cab_panel_w * 0.60);
+  _old = slider15; slider15 = lms_draw_cab_sel(cab_panel_x + 4, cab_cy, cab_cw - 8, bar_h, slider15);
+  slider15 != _old ? slider_automate(2^14);
+  _old = slider16; slider16 = lms_draw_toggle(cab_panel_x + cab_cw + floor(8 * S), cab_cy, slider16, "Cab Sim");
+  slider16 != _old ? slider_automate(2^15);
+  _old = slider17; slider17 = lms_draw_bar(cab_panel_x + 4, cab_cy + bar_sp, cab_panel_w - 8, bar_h, slider17, 0, 100, "Mic A Distance", 1);
+  slider17 != _old ? slider_automate(2^16);
+  _old = slider18; slider18 = lms_draw_cab_sel_b(cab_panel_x + 4, cab_cy + bar_sp * 2, cab_cw - 8, bar_h, slider18);
+  slider18 != _old ? slider_automate(2^17);
+  _old = slider19; slider19 = lms_draw_bar(cab_panel_x + 4, cab_cy + bar_sp * 3, cab_panel_w - 8, bar_h, slider19, 0, 100, "Mic B Distance", 1);
+  slider19 != _old ? slider_automate(2^18);
+  _old = slider25; slider25 = lms_draw_bar(cab_panel_x + 4, cab_cy + bar_sp * 4, cab_panel_w - 8, bar_h, slider25, 0, 100, "Spkr Breakup", 1);
+  slider25 != _old ? slider_automate(2^24);
+
+  // Impedance tap selector (clickable) + readout
+  gfx_setfont(1, "Arial", F_TINY);
+  ohm_tap_y = cab_cy + bar_sp * 5 + floor(2 * S);
+  ohm_tap_x = cab_panel_x + 4;
+  ohm_tap_w = floor(70 * S);
+  ohm_tap_h = floor(16 * S);
+  // Draw tap button
+  gfx_r = 0.10; gfx_g = 0.10; gfx_b = 0.14;
+  gfx_rect(ohm_tap_x, ohm_tap_y, ohm_tap_w, ohm_tap_h);
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(ohm_tap_x, ohm_tap_y, ohm_tap_w, 1);
+  gfx_rect(ohm_tap_x, ohm_tap_y + ohm_tap_h - 1, ohm_tap_w, 1);
+  gfx_rect(ohm_tap_x, ohm_tap_y, 1, ohm_tap_h);
+  gfx_rect(ohm_tap_x + ohm_tap_w - 1, ohm_tap_y, 1, ohm_tap_h);
+  gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+  gfx_x = ohm_tap_x + floor(4 * S); gfx_y = ohm_tap_y + floor((ohm_tap_h - F_TINY) / 2);
+  gfx_drawstr(sprintf(#, "Tap: %dR", amp_designed_ohms));
+  // Click to cycle 4->8->16->4
+  (mouse_cap & 1) && !(last_cap & 1) &&
+    mouse_x >= ohm_tap_x && mouse_x <= ohm_tap_x + ohm_tap_w &&
+    mouse_y >= ohm_tap_y && mouse_y <= ohm_tap_y + ohm_tap_h ? (
+      _old = slider20;
+      slider20 = (slider20 + 1) % 3;
+      slider20 != _old ? slider_automate(2^19);
+  );
+  // Load readout (right of tap button)
+  cab_load_ohms > 0 ? (
+    gfx_x = ohm_tap_x + ohm_tap_w + floor(8 * S); gfx_y = ohm_tap_y + floor((ohm_tap_h - F_TINY) / 2);
+    ohm_ratio > 0.9 && ohm_ratio < 1.1 ? (
+      gfx_r = 0.25; gfx_g = 0.80; gfx_b = 0.50;  // green — matched
+    ) : ohm_ratio > 0.6 && ohm_ratio < 1.5 ? (
+      gfx_r = 0.95; gfx_g = 0.78; gfx_b = 0.35;  // gold — close
+    ) : (
+      gfx_r = 0.95; gfx_g = 0.45; gfx_b = 0.15;  // orange — mismatch
+    );
+    cab_load_ohms == floor(cab_load_ohms) ? (
+      gfx_drawstr(sprintf(#, "Load: %dR", cab_load_ohms));
+    ) : (
+      gfx_drawstr(sprintf(#, "Load: %.1fR", cab_load_ohms));
+    );
+    ohm_ratio > 0.9 && ohm_ratio < 1.1 ? (
+      gfx_r = 0.25; gfx_g = 0.80; gfx_b = 0.50;
+      gfx_drawstr(" matched");
+    );
+  );
+
+// ============================================================================
+//  DENSITY AWARENESS PANEL
+// ============================================================================
+  dm_panel_y = cab_panel_y + cab_panel_h + gap;
+  dm_panel_w = col_w * 3 + gap * 2;
+  lms_dm_panel();
+  // Meter 1: MILLER LP
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, dm_meter_h);
+  dm_mfill = max(0, min(1, (d_miller_freq - 5000) / 15000));
+  dm_mfill_w = dm_mfill * dm_mw;
+  dm_mfill_w > 0 ? ( gfx_r = COL_CYAN_R * 0.6; gfx_g = COL_CYAN_G * 0.6; gfx_b = COL_CYAN_B * 0.6; gfx_rect(dm_mx, dm_my, dm_mfill_w, dm_meter_h); gfx_r = COL_CYAN_R; gfx_g = COL_CYAN_G; gfx_b = COL_CYAN_B; gfx_rect(dm_mx, dm_my, dm_mfill_w, 1); );
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, 1); gfx_rect(dm_mx, dm_my + dm_meter_h - 1, dm_mw, 1);
+  gfx_rect(dm_mx, dm_my, 1, dm_meter_h); gfx_rect(dm_mx + dm_mw - 1, dm_my, 1, dm_meter_h);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", max(7, floor(9 * S)));
+  gfx_x = dm_mx + floor(2 * S); gfx_y = dm_my + floor((dm_meter_h - floor(9 * S)) / 2);
+  d_miller_freq >= 10000 ? gfx_drawstr(sprintf(#, "%.1fk", d_miller_freq / 1000)) : gfx_drawstr(sprintf(#, "%dHz", floor(d_miller_freq)));
+  // Meter 2: MILLER Q
+  dm_mx += dm_mw + dm_meter_gap;
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, dm_meter_h);
+  dm_mfill = max(0, min(1, (d_miller_q - 0.6) / 0.35));
+  dm_mfill_w = dm_mfill * dm_mw;
+  dm_mfill_w > 0 ? ( gfx_r = COL_CYAN_R * 0.6; gfx_g = COL_CYAN_G * 0.6; gfx_b = COL_CYAN_B * 0.6; gfx_rect(dm_mx, dm_my, dm_mfill_w, dm_meter_h); gfx_r = COL_CYAN_R; gfx_g = COL_CYAN_G; gfx_b = COL_CYAN_B; gfx_rect(dm_mx, dm_my, dm_mfill_w, 1); );
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, 1); gfx_rect(dm_mx, dm_my + dm_meter_h - 1, dm_mw, 1);
+  gfx_rect(dm_mx, dm_my, 1, dm_meter_h); gfx_rect(dm_mx + dm_mw - 1, dm_my, 1, dm_meter_h);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", max(7, floor(9 * S)));
+  gfx_x = dm_mx + floor(2 * S); gfx_y = dm_my + floor((dm_meter_h - floor(9 * S)) / 2);
+  gfx_drawstr("MLR Q");
+  // Meter 3: GRID COND
+  dm_mx += dm_mw + dm_meter_gap;
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, dm_meter_h);
+  dm_mfill = max(0, min(1, d_grid_cond / 0.35));
+  dm_mfill_w = dm_mfill * dm_mw;
+  dm_mfill_w > 0 ? ( gfx_r = COL_CYAN_R * 0.6; gfx_g = COL_CYAN_G * 0.6; gfx_b = COL_CYAN_B * 0.6; gfx_rect(dm_mx, dm_my, dm_mfill_w, dm_meter_h); gfx_r = COL_CYAN_R; gfx_g = COL_CYAN_G; gfx_b = COL_CYAN_B; gfx_rect(dm_mx, dm_my, dm_mfill_w, 1); );
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, 1); gfx_rect(dm_mx, dm_my + dm_meter_h - 1, dm_mw, 1);
+  gfx_rect(dm_mx, dm_my, 1, dm_meter_h); gfx_rect(dm_mx + dm_mw - 1, dm_my, 1, dm_meter_h);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", max(7, floor(9 * S)));
+  gfx_x = dm_mx + floor(2 * S); gfx_y = dm_my + floor((dm_meter_h - floor(9 * S)) / 2);
+  gfx_drawstr("GRID");
+  // Meter 4: DRIVE
+  dm_mx += dm_mw + dm_meter_gap;
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, dm_meter_h);
+  dm_mfill = max(0, min(1, (d_drive_boost - 1.0) / 0.4));
+  dm_mfill_w = dm_mfill * dm_mw;
+  dm_mfill_w > 0 ? ( gfx_r = COL_CYAN_R * 0.6; gfx_g = COL_CYAN_G * 0.6; gfx_b = COL_CYAN_B * 0.6; gfx_rect(dm_mx, dm_my, dm_mfill_w, dm_meter_h); gfx_r = COL_CYAN_R; gfx_g = COL_CYAN_G; gfx_b = COL_CYAN_B; gfx_rect(dm_mx, dm_my, dm_mfill_w, 1); );
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, 1); gfx_rect(dm_mx, dm_my + dm_meter_h - 1, dm_mw, 1);
+  gfx_rect(dm_mx, dm_my, 1, dm_meter_h); gfx_rect(dm_mx + dm_mw - 1, dm_my, 1, dm_meter_h);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", max(7, floor(9 * S)));
+  gfx_x = dm_mx + floor(2 * S); gfx_y = dm_my + floor((dm_meter_h - floor(9 * S)) / 2);
+  gfx_drawstr("DRIVE");
+  // Meter 5: B+ RAIL
+  dm_mx += dm_mw + dm_meter_gap;
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, dm_meter_h);
+  dm_mfill = max(0, min(1, (d_bplus - 0.75) / 0.25));
+  dm_mfill_w = dm_mfill * dm_mw;
+  dm_mfill_w > 0 ? ( gfx_r = COL_CYAN_R * 0.6; gfx_g = COL_CYAN_G * 0.6; gfx_b = COL_CYAN_B * 0.6; gfx_rect(dm_mx, dm_my, dm_mfill_w, dm_meter_h); gfx_r = COL_CYAN_R; gfx_g = COL_CYAN_G; gfx_b = COL_CYAN_B; gfx_rect(dm_mx, dm_my, dm_mfill_w, 1); );
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(dm_mx, dm_my, dm_mw, 1); gfx_rect(dm_mx, dm_my + dm_meter_h - 1, dm_mw, 1);
+  gfx_rect(dm_mx, dm_my, 1, dm_meter_h); gfx_rect(dm_mx + dm_mw - 1, dm_my, 1, dm_meter_h);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", max(7, floor(9 * S)));
+  gfx_x = dm_mx + floor(2 * S); gfx_y = dm_my + floor((dm_meter_h - floor(9 * S)) / 2);
+  gfx_drawstr("B+");
+
+
+  last_cap = mouse_cap;
+
+  // --- BUY + NOTICE BUTTONS ---
+  lms_gfx_chrome(gfx_h - floor(20 * S));
+
+// ============================================================
+// @SERIALIZE — Persist follow state
+// ============================================================
+@serialize
+file_var(0, bc.bc_ser_compat_1);
+file_var(0, bc.bc_ser_compat_2);

@@ -1,0 +1,75 @@
+name: LMS Rig
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+env:
+  YSFX_REPO: https://github.com/JoepVanlier/ysfx.git
+  YSFX_REF: 5c3452fee62583aa3d1b7e877d0c758c4024af89
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux, os: ubuntu-22.04 }
+          - { name: macos, os: macos-latest }
+          - { name: windows, os: windows-2022 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch ysfx
+        shell: bash
+        run: |
+          git init ysfx && cd ysfx
+          git remote add origin "$YSFX_REPO"
+          git fetch --depth 1 origin "$YSFX_REF"
+          git checkout FETCH_HEAD
+          git submodule update --init --recursive --depth 1
+          git apply ../ysfx.patch
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get -y update && sudo apt-get -y install
+          libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig-dev
+          libgl-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev
+
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm -y
+          echo "C:\Program Files\NASM" | Out-File -Append $env:GITHUB_PATH
+
+      - name: Configure
+        shell: bash
+        run: |
+          extra=()
+          [ "$RUNNER_OS" = macOS ] && extra+=(-DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13)
+          [ "$RUNNER_OS" = Windows ] && extra+=(-DYSFX_STATIC_CRT=ON)
+          cmake -S ysfx -B build -DCMAKE_BUILD_TYPE=Release \
+            -DLMS_RIG_DIR="$GITHUB_WORKSPACE" -DYSFX_PLUGIN_COPY=OFF "${extra[@]}"
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake --build build --config Release -j 4 --target lms_rig_Standalone
+          cmake --build build --config Release -j 4 --target lms_rig_VST3
+
+      - name: Package
+        shell: bash
+        run: |
+          out="LMS-Rig-${{ matrix.name }}"
+          mkdir "$out"
+          cp -R build/lms_rig_artefacts/Release/Standalone/* "$out/"
+          cp -R build/lms_rig_artefacts/Release/VST3/* "$out/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LMS-Rig-${{ matrix.name }}
+          path: LMS-Rig-${{ matrix.name }}

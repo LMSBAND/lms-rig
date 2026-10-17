@@ -1,0 +1,25 @@
+diff --git a/plugin/processor.cpp b/plugin/processor.cpp
+index f9f1b1e..9b3b6ac 100644
+--- a/plugin/processor.cpp
++++ b/plugin/processor.cpp
+@@ -1319,7 +1319,9 @@ void YsfxProcessor::Impl::audioProcessorChanged(AudioProcessor *processor, const
+ }
+ 
+ //==============================================================================
++#ifndef YSFX_NO_PLUGIN_ENTRY
+ juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter()
+ {
+     return new YsfxProcessor;
+ }
++#endif
+diff --git a/cmake.plugin.txt b/cmake.plugin.txt
+--- a/cmake.plugin.txt
++++ b/cmake.plugin.txt
+@@ -175,3 +175,7 @@ endfunction()
+ 
+ add_new_target(ysfx_plugin_instrument TRUE)
+ add_new_target(ysfx_plugin FALSE)
++
++if(LMS_RIG_DIR)
++    include("${LMS_RIG_DIR}/rig.cmake")
++endif()
