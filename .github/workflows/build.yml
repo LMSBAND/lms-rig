@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
+    tags: ["v*"]
+
+permissions:
+  contents: write
 
 env:
   YSFX_REPO: https://github.com/JoepVanlier/ysfx.git
@@ -68,8 +72,19 @@ jobs:
           mkdir "$out"
           cp -R build/lms_rig_artefacts/Release/Standalone/* "$out/"
           cp -R build/lms_rig_artefacts/Release/VST3/* "$out/"
+          case "$RUNNER_OS" in
+            macOS)   ditto -c -k --keepParent "$out" "$out.zip" ;;          # keeps exec bits + bundle metadata
+            Windows) 7z a "$out.zip" "$out" > /dev/null ;;
+            Linux)   cp install.sh icon.png "$out/" && tar czf "$out.tar.gz" "$out" ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:
           name: LMS-Rig-${{ matrix.name }}
-          path: LMS-Rig-${{ matrix.name }}
+          path: LMS-Rig-${{ matrix.name }}.*
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LMS-Rig-${{ matrix.name }}.*
