@@ -302,10 +302,10 @@ namespace {
 
 constexpr int kWidth = 1500;
 constexpr int kPedalHeight = 580;
-constexpr int kBarHeight = 44;
-constexpr int kAmpColumn = 640;
-constexpr int kBottomHeight = 760;
-constexpr int kHeight = kPedalHeight + kBarHeight + kBottomHeight;
+constexpr int kBottomHeight = 800;
+constexpr int kSideWidth = 340;               // head picker + cab, right of the amp
+constexpr int kAmpArea = kWidth - kSideWidth;  // amp is scaled to fill this
+constexpr int kHeight = kPedalHeight + kBottomHeight;
 
 const juce::Colour kBg{0xff0e0b0b};
 const juce::Colour kPanel{0xff1a1414};
@@ -351,12 +351,13 @@ public:
             m_content.addAndMakeVisible(c);
 
         // cab section
-        setupLabel(m_cabTitle, "CABINET", 26.0f);
-        setupLabel(m_aLabel, "CAB A", 16.0f);
-        setupLabel(m_bLabel, "CAB B", 16.0f);
-        setupLabel(m_micALabel, "Mic distance", 13.0f);
-        setupLabel(m_micBLabel, "Mic distance", 13.0f);
-        setupLabel(m_breakupLabel, "Speaker breakup", 13.0f);
+        setupLabel(m_headTitle, "AMP HEAD", 20.0f);
+        setupLabel(m_cabTitle, "CABINET", 20.0f);
+        setupLabel(m_aLabel, "A", 15.0f);
+        setupLabel(m_bLabel, "B", 15.0f);
+        setupLabel(m_micALabel, "Mic A", 13.0f);
+        setupLabel(m_micBLabel, "Mic B", 13.0f);
+        setupLabel(m_breakupLabel, "Breakup", 13.0f);
 
         m_typeA.onChange = [this] { m_proc.setCabValue(cabType, m_typeA.getSelectedItemIndex()); };
         m_typeB.onChange = [this] { m_proc.setCabValue(cabTypeB, m_typeB.getSelectedItemIndex()); };
@@ -401,11 +402,12 @@ private:
         {
             g.fillAll(kBg);
             g.setColour(kPanel);
-            g.fillRect(0, kPedalHeight, kWidth, kBarHeight);
-            g.fillRect(kAmpColumn + 20, kPedalHeight + kBarHeight + 10, kWidth - kAmpColumn - 30, kBottomHeight - 20);
+            g.fillRect(kAmpArea, kPedalHeight, kSideWidth, kBottomHeight);
             g.setColour(kAccent);
             g.fillRect(0, kPedalHeight, kWidth, 2);
-            g.fillRect(0, kPedalHeight + kBarHeight - 2, kWidth, 2);
+            g.fillRect(kAmpArea, kPedalHeight, 2, kBottomHeight);
+            g.setColour(kAccent.withAlpha(0.4f));
+            g.fillRect(kAmpArea + 20, kPedalHeight + 120, kSideWidth - 40, 1);
         }
     };
 
@@ -420,7 +422,7 @@ private:
     void setupKnob(juce::Slider &s, CabKey k)
     {
         s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 70, 20);
+        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 18);
         s.setRange(0.0, 100.0, 1.0);
         s.setTextValueSuffix(" %");
         s.onValueChange = [this, &s, k] { m_proc.setCabValue(k, s.getValue()); };
@@ -430,50 +432,53 @@ private:
     void layoutContent()
     {
         m_pedalView.setBounds(0, 0, kWidth, kPedalHeight);
-
-        int barY = kPedalHeight + 6;
-        int bh = kBarHeight - 12;
-        m_prev.setBounds(10, barY, 40, bh);
-        m_ampBox.setBounds(56, barY, kAmpColumn - 112, bh);
-        m_next.setBounds(kAmpColumn - 50, barY, 40, bh);
-
         layoutAmpView();
 
-        int x0 = kAmpColumn + 20, w = kWidth - kAmpColumn - 30;
-        int y = kPedalHeight + kBarHeight + 30;
-        m_cabTitle.setBounds(x0, y, w, 36);
-        y += 70;
-        int colW = w / 2;
-        m_aLabel.setBounds(x0, y, colW, 24);
-        m_bLabel.setBounds(x0 + colW, y, colW, 24);
-        y += 34;
-        m_typeA.setBounds(x0 + 30, y, colW - 60, 30);
-        m_typeB.setBounds(x0 + colW + 30, y, colW - 60, 30);
-        y += 60;
-        m_micALabel.setBounds(x0, y, colW, 20);
-        m_micBLabel.setBounds(x0 + colW, y, colW, 20);
-        y += 22;
-        m_micA.setBounds(x0 + colW / 2 - 60, y, 120, 130);
-        m_micB.setBounds(x0 + colW + colW / 2 - 60, y, 120, 130);
-        y += 190;
-        m_breakupLabel.setBounds(x0, y, w, 20);
-        y += 22;
-        m_breakup.setBounds(x0 + w / 2 - 70, y, 140, 150);
-        y += 190;
-        m_cabOn.setBounds(x0 + w / 2 - 60, y, 120, 30);
+        const int x0 = kAmpArea + 20, w = kSideWidth - 40;
+        int y = kPedalHeight + 20;
+        m_headTitle.setBounds(x0, y, w, 28);
+        y += 40;
+        m_prev.setBounds(x0, y, 36, 34);
+        m_ampBox.setBounds(x0 + 42, y, w - 84, 34);
+        m_next.setBounds(x0 + w - 36, y, 36, 34);
+
+        y = kPedalHeight + 140;
+        m_cabTitle.setBounds(x0, y, w, 28);
+        y += 44;
+        m_aLabel.setBounds(x0, y, 24, 30);
+        m_typeA.setBounds(x0 + 30, y, w - 30, 30);
+        y += 40;
+        m_bLabel.setBounds(x0, y, 24, 30);
+        m_typeB.setBounds(x0 + 30, y, w - 30, 30);
+        y += 56;
+
+        const int colW = w / 3, knob = 90;
+        juce::Label *labels[] = {&m_micALabel, &m_micBLabel, &m_breakupLabel};
+        juce::Slider *knobs[] = {&m_micA, &m_micB, &m_breakup};
+        for (int i = 0; i < 3; ++i) {
+            int cx = x0 + colW * i + colW / 2;
+            labels[i]->setBounds(cx - colW / 2, y, colW, 20);
+            knobs[i]->setBounds(cx - knob / 2, y + 22, knob, knob + 18);
+        }
+        y += 22 + knob + 18 + 30;
+        m_cabOn.setBounds(x0 + w / 2 - 55, y, 110, 30);
     }
 
     void layoutAmpView()
     {
-        int w = kAmpColumn, h = kBottomHeight;
+        // scale the head's canvas to fill the amp area; the JSFX scale themselves off gfx_w
+        int w = 600, h = 564;
         if (auto info = m_proc.amp().getCurrentInfo()) {
             uint32_t dim[2] = {};
             if (info->effect && ysfx_get_gfx_dim(info->effect.get(), dim) && dim[0] && dim[1]) {
-                w = juce::jmin((int)dim[0], kAmpColumn);
-                h = juce::jmin((int)dim[1], kBottomHeight);
+                w = (int)dim[0];
+                h = (int)dim[1];
             }
         }
-        m_ampView.setBounds((kAmpColumn - w) / 2, kPedalHeight + kBarHeight + (kBottomHeight - h) / 2, w, h);
+        const int pad = 16;
+        double s = juce::jmin((kAmpArea - 2.0 * pad) / w, (kBottomHeight - 2.0 * pad) / h);
+        int sw = juce::roundToInt(w * s), sh = juce::roundToInt(h * s);
+        m_ampView.setBounds((kAmpArea - sw) / 2, kPedalHeight + (kBottomHeight - sh) / 2, sw, sh);
     }
 
     void step(int dir)
@@ -538,7 +543,7 @@ private:
     juce::TextButton m_prev, m_next;
     juce::ComboBox m_ampBox;
 
-    juce::Label m_cabTitle, m_aLabel, m_bLabel, m_micALabel, m_micBLabel, m_breakupLabel;
+    juce::Label m_headTitle, m_cabTitle, m_aLabel, m_bLabel, m_micALabel, m_micBLabel, m_breakupLabel;
     juce::ComboBox m_typeA, m_typeB;
     juce::ToggleButton m_cabOn;
     juce::Slider m_micA, m_micB, m_breakup;
