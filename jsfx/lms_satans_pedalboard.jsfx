@@ -140,8 +140,8 @@ PW_BUF       = 135168;   PW_BUF_SIZE = 4096;            // flanger
 FLERB_FL_BUF = 139264;   FLERB_FL_SIZE = 4096;          // internal flanger for Flerb mode
 UB_FDN_BUF   = 143360;   UB_LINE_LEN  = 4096;           // hall FDN (4 lines × 4096)
 UB_PRE_BUF   = 159744;   UB_PRE_SIZE  = 2048;           // hall pre-delay
-UB_SPRING_BUF = 170100;  UB_SPRING_SIZE = 11000;        // spring reverb (core hardcodes 50000 which lands inside EL_BUF)
-// TUNER_BUF (YIN circular buffer + workspace, 8192 slots) reserved at 161908,
+UB_SPRING_BUF = 174196;  UB_SPRING_SIZE = 11000;        // spring reverb (core hardcodes 50000 which lands inside EL_BUF)
+// TUNER_BUF (YIN circular buffer + workspace, 12288 slots) reserved at 161908,
 // after the SECTION_/CHAIN_ORDER/EQ_DEFAULTS scratch arrays (see @init below).
 // Sized for min_freq=55 detection at sample rates up to 96kHz.
 
@@ -266,7 +266,7 @@ pb_stepper.lms_12stepper_set(0.5);
 
 // GREEN SIN — Tube Screamer, stereo (paired L/R)
 pb_ts_l.lms_ts_init();  pb_ts_r.lms_ts_init();
-pb_ts_l.lms_ts_set(0.5);  pb_ts_r.lms_ts_set(0.5);
+pb_ts_l.lms_ts_set(0.5, 0.5);  pb_ts_r.lms_ts_set(0.5, 0.5);
 
 // GOLDEN CALF — Klon Centaur, stereo (paired L/R)
 pb_klon_l.lms_klon_init();  pb_klon_r.lms_klon_init();
@@ -340,10 +340,10 @@ function run_marmot() (
 function run_stepper() local(mono, wet) (
   st_on ? (
     mono = (l_ + r_) * 0.5;
-    wet = pb_stepper.lms_12stepper_proc(mono, st_dry, st_dn1, st_dn2, st_up);
-    // Octave pedal is a full replacement of the signal (dry is in the mix already)
-    l_ = wet;
-    r_ = wet;
+    // dry stays per-channel (guitar on L only must not drop 6 dB); octaves from the mono sum
+    wet = pb_stepper.lms_12stepper_proc(mono, 0, st_dn1, st_dn2, st_up);
+    l_ = l_ * st_dry + wet;
+    r_ = r_ * st_dry + wet;
   );
 );
 function run_ts() (
@@ -393,7 +393,7 @@ EQ_DEFAULTS[15]=  0; EQ_DEFAULTS[16]=  0; EQ_DEFAULTS[17]=  0; EQ_DEFAULTS[18]= 
 eq_mode_last = slider71;
 
 // === TUNER (YIN-based, drop-tuning safe, OFF by default) ===
-TUNER_BUF = 161908;  // 8192 reserved slots — fits min_freq=55 up to 96kHz
+TUNER_BUF = 161908;  // 12288 reserved slots (to 174196) — fits min_freq=55 up to 192kHz
 tuner.lms_tuner_init(TUNER_BUF);
 
 // Populate SECTION_ORDER from default preset, then flatten into CHAIN_ORDER
@@ -490,9 +490,9 @@ st_up  = slider64 / 100;
 ts_on    = slider38;
 ts_drive = slider66 / 100;
 ts_tone  = slider67 / 100;
-ts_level = slider68 / 100 * 2.0;  // 0..2× so user can make up level
-pb_ts_l.lms_ts_set(ts_tone);
-pb_ts_r.lms_ts_set(ts_tone);
+ts_level = slider68 / 100;
+pb_ts_l.lms_ts_set(ts_tone, ts_drive);
+pb_ts_r.lms_ts_set(ts_tone, ts_drive);
 
 // GOLDEN CALF (Klon Centaur)
 klon_on    = slider46;
@@ -554,9 +554,9 @@ pb_marmot_l.lms_marmot_set(ma_drive, ma_tone);
 pb_marmot_r.lms_marmot_set(ma_drive, ma_tone);
 st_on = slider37; st_dry = slider61/100; st_dn1 = slider62/100; st_dn2 = slider63/100; st_up = slider64/100;
 
-ts_on = slider38; ts_drive = slider66/100; ts_tone = slider67/100; ts_level = slider68/100 * 2.0;
-pb_ts_l.lms_ts_set(ts_tone);
-pb_ts_r.lms_ts_set(ts_tone);
+ts_on = slider38; ts_drive = slider66/100; ts_tone = slider67/100; ts_level = slider68/100;
+pb_ts_l.lms_ts_set(ts_tone, ts_drive);
+pb_ts_r.lms_ts_set(ts_tone, ts_drive);
 
 klon_on = slider46; klon_drive = slider47/100; klon_treble = slider48/100; klon_level = slider49/100;
 pb_klon_l.lms_klon_set(klon_treble);

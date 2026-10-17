@@ -15,6 +15,7 @@ fi
 prefix="$HOME/.local/opt/lms-rig"
 mkdir -p "$prefix" "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/256x256/apps"
 
+rm -f "$prefix/lms-rig"   # unlink first so a running copy doesn't block the update
 cp "$app" "$prefix/lms-rig"
 ln -sf "$prefix/lms-rig" "$HOME/.local/bin/lms-rig"
 cp "$here/icon.png" "$HOME/.local/share/icons/hicolor/256x256/apps/lms-rig.png"
