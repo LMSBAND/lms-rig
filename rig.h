@@ -32,6 +32,10 @@ public:
     YsfxParameter *ampCabParam(CabKey k);
     bool pollCabFromAmp();  // adopt edits made in the amp's own UI; true if changed
 
+    // editor view prefs, saved with the rig
+    bool hideInactivePedals = false;
+    bool classicView = false;  // the JSFX's own UIs instead of the native panels
+
     //==========================================================================
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;

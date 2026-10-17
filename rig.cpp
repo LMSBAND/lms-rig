@@ -1,6 +1,7 @@
 // LMS Rig — see rig.h
 
 #include "rig.h"
+#include "rig_ui.h"
 #include "parameter.h"
 #include "components/graphics_view.h"
 #include "ysfx.h"
@@ -226,6 +227,8 @@ void RigProcessor::getStateInformation(juce::MemoryBlock &dest)
 
     juce::ValueTree root("lmsrig");
     root.setProperty("version", 1, nullptr);
+    root.setProperty("hideInactive", hideInactivePedals, nullptr);
+    root.setProperty("classicView", classicView, nullptr);
     if (m_ampIndex >= 0)
         root.setProperty("amp", juce::File(m_ampPaths[m_ampIndex]).getFileName(), nullptr);
 
@@ -258,6 +261,8 @@ void RigProcessor::setStateInformation(const void *data, int size)
     juce::ValueTree root = juce::ValueTree::readFromData(data, (size_t)size);
     if (!root.hasType("lmsrig"))
         return;
+    hideInactivePedals = root.getProperty("hideInactive", false);
+    classicView = root.getProperty("classicView", false);
 
     juce::MemoryBlock pedalState;
     if (pedalState.fromBase64Encoding(root.getChildWithName("pedals").getProperty("data").toString()))
@@ -300,44 +305,34 @@ void RigProcessor::setStateInformation(const void *data, int size)
 //==============================================================================
 namespace {
 
+using rigui::kBg;
+using rigui::kPanel;
+using rigui::kAccent;
+using rigui::kText;
+
 constexpr int kWidth = 1500;
 constexpr int kPedalHeight = 580;
+constexpr int kPedalHeader = 122;             // JSFX title + tuner strip, kept above the native board
 constexpr int kBottomHeight = 800;
 constexpr int kSideWidth = 340;               // head picker + cab, right of the amp
 constexpr int kAmpArea = kWidth - kSideWidth;  // amp is scaled to fill this
 constexpr int kHeight = kPedalHeight + kBottomHeight;
-
-const juce::Colour kBg{0xff0e0b0b};
-const juce::Colour kPanel{0xff1a1414};
-const juce::Colour kAccent{0xffc0392b};
-const juce::Colour kText{0xffe8dcdc};
 
 class RigEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit RigEditor(RigProcessor &p)
         : AudioProcessorEditor(p), m_proc(p)
     {
-        auto &lf = getLookAndFeel();
-        lf.setColour(juce::ComboBox::backgroundColourId, kPanel.brighter(0.08f));
-        lf.setColour(juce::ComboBox::outlineColourId, kAccent.withAlpha(0.6f));
-        lf.setColour(juce::ComboBox::textColourId, kText);
-        lf.setColour(juce::PopupMenu::backgroundColourId, kPanel);
-        lf.setColour(juce::PopupMenu::highlightedBackgroundColourId, kAccent);
-        lf.setColour(juce::TextButton::buttonColourId, kPanel.brighter(0.08f));
-        lf.setColour(juce::TextButton::textColourOffId, kText);
-        lf.setColour(juce::Slider::thumbColourId, kAccent);
-        lf.setColour(juce::Slider::rotarySliderFillColourId, kAccent);
-        lf.setColour(juce::Slider::trackColourId, kAccent.withAlpha(0.7f));
-        lf.setColour(juce::Slider::textBoxTextColourId, kText);
-        lf.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        lf.setColour(juce::Label::textColourId, kText);
-        lf.setColour(juce::ToggleButton::textColourId, kText);
-        lf.setColour(juce::ToggleButton::tickColourId, kAccent);
+        setLookAndFeel(&m_lnf);
 
         addAndMakeVisible(m_content);
         m_content.setSize(kWidth, kHeight);
-        m_content.addAndMakeVisible(m_pedalView);
-        m_content.addAndMakeVisible(m_ampView);
+        m_content.addAndMakeVisible(m_pedalClip);
+        m_pedalClip.addAndMakeVisible(m_pedalView);
+        m_content.addChildComponent(m_pedalPanel);
+        m_content.addChildComponent(m_ampView);
+        m_content.addChildComponent(m_ampPanel);
+        m_pedalPanel.onHideInactiveChanged = [this](bool hide) { m_proc.hideInactivePedals = hide; };
 
         // amp head picker
         m_prev.setButtonText("<");
@@ -366,11 +361,16 @@ public:
         setupKnob(m_micA, cabMic);
         setupKnob(m_micB, cabMicB);
         setupKnob(m_breakup, cabBreakup);
-        for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_cabOn})
+        m_classic.setButtonText("Classic view");
+        m_classic.setToggleState(m_proc.classicView, juce::dontSendNotification);
+        m_classic.onClick = [this] { m_proc.classicView = m_classic.getToggleState(); applyView(); };
+        for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_cabOn, &m_classic})
             m_content.addAndMakeVisible(c);
 
         layoutContent();
         refreshAll();
+        applyView();
+        m_content.sendLookAndFeelChange();
 
         auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
         double scale = juce::jmin(1.0, area.getHeight() * 0.92 / kHeight, area.getWidth() * 0.95 / kWidth);
@@ -386,6 +386,7 @@ public:
     {
         m_pedalView.setEffect(nullptr);
         m_ampView.setEffect(nullptr);
+        setLookAndFeel(nullptr);
     }
 
     void paint(juce::Graphics &g) override { g.fillAll(kBg); }
@@ -408,6 +409,7 @@ private:
             g.fillRect(kAmpArea, kPedalHeight, 2, kBottomHeight);
             g.setColour(kAccent.withAlpha(0.4f));
             g.fillRect(kAmpArea + 20, kPedalHeight + 120, kSideWidth - 40, 1);
+            g.fillRect(kAmpArea + 20, kHeight - 70, kSideWidth - 40, 1);
         }
     };
 
@@ -429,9 +431,21 @@ private:
         m_content.addAndMakeVisible(s);
     }
 
+    // native panels, or the JSFX's own UIs (the pedalboard header + tuner stay JSFX either way)
+    void applyView()
+    {
+        const bool classic = m_proc.classicView;
+        m_pedalClip.setBounds(0, 0, kWidth, classic ? kPedalHeight : kPedalHeader);
+        m_pedalPanel.setVisible(!classic);
+        m_ampPanel.setVisible(!classic);
+        m_ampView.setVisible(classic);
+    }
+
     void layoutContent()
     {
         m_pedalView.setBounds(0, 0, kWidth, kPedalHeight);
+        m_pedalPanel.setBounds(0, kPedalHeader, kWidth, kPedalHeight - kPedalHeader);
+        m_ampPanel.setBounds(0, kPedalHeight, kAmpArea, kBottomHeight);
         layoutAmpView();
 
         const int x0 = kAmpArea + 20, w = kSideWidth - 40;
@@ -462,6 +476,8 @@ private:
         }
         y += 22 + knob + 18 + 30;
         m_cabOn.setBounds(x0 + w / 2 - 55, y, 110, 30);
+
+        m_classic.setBounds(x0 + w / 2 - 70, kHeight - 50, 140, 30);
     }
 
     void layoutAmpView()
@@ -522,30 +538,44 @@ private:
         if (auto info = m_proc.pedals().getCurrentInfo(); info != m_pedalInfo) {
             m_pedalInfo = info;
             m_pedalView.setEffect(info ? info->effect.get() : nullptr);
+            m_pedalPanel.build(m_proc.pedals());
+            m_pedalPanel.setHideInactive(m_proc.hideInactivePedals);
+            m_pedalPanel.sendLookAndFeelChange();  // controls were made before they had our L&F
         }
         if (auto info = m_proc.amp().getCurrentInfo(); info != m_ampInfo) {
             m_ampInfo = info;
+            m_ampBox.setSelectedItemIndex(m_proc.ampIndex(), juce::dontSendNotification);  // head may change under us (state load)
             m_ampView.setEffect(info ? info->effect.get() : nullptr);
             layoutAmpView();
+            m_ampPanel.build(m_proc.amp(), juce::StringArray(kCabSliderNames, numCabKeys));
+            m_ampPanel.sendLookAndFeelChange();
             fillCabTypes(m_typeA, cabType);
             fillCabTypes(m_typeB, cabTypeB);
             refreshCab();
         }
         if (m_proc.pollCabFromAmp())
             refreshCab();
+        if (!m_proc.classicView) {
+            m_pedalPanel.sync();
+            m_ampPanel.sync();
+        }
     }
 
     RigProcessor &m_proc;
+    rigui::RigLookAndFeel m_lnf;
     YsfxInfo::Ptr m_pedalInfo, m_ampInfo;
 
     Content m_content;
+    juce::Component m_pedalClip;  // shows the whole JSFX board, or just its header + tuner
     YsfxGraphicsView m_pedalView, m_ampView;
+    rigui::PedalboardPanel m_pedalPanel;
+    rigui::AmpPanel m_ampPanel;
     juce::TextButton m_prev, m_next;
     juce::ComboBox m_ampBox;
 
     juce::Label m_headTitle, m_cabTitle, m_aLabel, m_bLabel, m_micALabel, m_micBLabel, m_breakupLabel;
     juce::ComboBox m_typeA, m_typeB;
-    juce::ToggleButton m_cabOn;
+    juce::ToggleButton m_cabOn, m_classic;
     juce::Slider m_micA, m_micB, m_breakup;
 };
 
