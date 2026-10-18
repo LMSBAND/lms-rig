@@ -318,6 +318,41 @@ constexpr int kSideWidth = 340;               // head picker + cab, right of the
 constexpr int kAmpArea = kWidth - kSideWidth;  // amp is scaled to fill this
 constexpr int kHeight = kPedalHeight + kBottomHeight;
 
+// Cab load vs the amp's impedance tap, read from the head's own variables
+struct MatchLight : juce::Component {
+    double load = 0, tap = 0;
+
+    void set(double newLoad, double newTap)
+    {
+        if (newLoad != load || newTap != tap) {
+            load = newLoad;
+            tap = newTap;
+            repaint();
+        }
+    }
+
+    void paint(juce::Graphics &g) override
+    {
+        const bool known = load > 0 && tap > 0;
+        const bool matched = known && std::abs(load - tap) < 0.01;
+        const juce::Colour c = !known ? rigui::kDim : matched ? juce::Colour(0xff3fbf5f) : juce::Colour(0xffe0a020);
+        auto r = getLocalBounds().toFloat();
+        auto led = r.removeFromLeft(r.getHeight()).reduced(r.getHeight() * 0.28f);
+        g.setColour(c.withAlpha(0.35f));
+        g.fillEllipse(led.expanded(led.getWidth() * 0.45f));
+        g.setColour(c);
+        g.fillEllipse(led);
+        r.removeFromLeft(8);
+
+        auto ohms = [](double v) { return juce::String(v, v == std::floor(v) ? 0 : 1) + juce::String(juce::CharPointer_UTF8(" \u03a9")); };
+        juce::String text = !known ? juce::String("No cab load")
+                          : (matched ? "MATCHED  " : "MISMATCH  ") + ohms(load) + " cab on " + ohms(tap) + " tap";
+        g.setColour(matched ? rigui::kText : c);
+        g.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+        g.drawText(text, r, juce::Justification::centredLeft);
+    }
+};
+
 class RigEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit RigEditor(RigProcessor &p)
@@ -364,7 +399,7 @@ public:
         m_classic.setButtonText("Classic view");
         m_classic.setToggleState(m_proc.classicView, juce::dontSendNotification);
         m_classic.onClick = [this] { m_proc.classicView = m_classic.getToggleState(); applyView(); };
-        for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_cabOn, &m_classic})
+        for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_match, &m_cabOn, &m_classic})
             m_content.addAndMakeVisible(c);
 
         layoutContent();
@@ -464,7 +499,9 @@ private:
         y += 40;
         m_bLabel.setBounds(x0, y, 24, 30);
         m_typeB.setBounds(x0 + 30, y, w - 30, 30);
-        y += 56;
+        y += 38;
+        m_match.setBounds(x0 + 30, y, w - 30, 24);
+        y += 40;
 
         const int colW = w / 3, knob = 90;
         juce::Label *labels[] = {&m_micALabel, &m_micBLabel, &m_breakupLabel};
@@ -552,7 +589,11 @@ private:
             fillCabTypes(m_typeA, cabType);
             fillCabTypes(m_typeB, cabTypeB);
             refreshCab();
+            ysfx_t *fx = info ? info->effect.get() : nullptr;
+            m_loadVar = fx ? ysfx_find_var(fx, "cab_load_ohms") : nullptr;
+            m_tapVar = fx ? ysfx_find_var(fx, "amp_designed_ohms") : nullptr;
         }
+        m_match.set(m_loadVar ? *m_loadVar : 0.0, m_tapVar ? *m_tapVar : 0.0);
         if (m_proc.pollCabFromAmp())
             refreshCab();
         if (!m_proc.classicView) {
@@ -564,6 +605,7 @@ private:
     RigProcessor &m_proc;
     rigui::RigLookAndFeel m_lnf;
     YsfxInfo::Ptr m_pedalInfo, m_ampInfo;
+    ysfx_real *m_loadVar = nullptr, *m_tapVar = nullptr;  // live in the head's VM
 
     Content m_content;
     juce::Component m_pedalClip;  // shows the whole JSFX board, or just its header + tuner
@@ -571,10 +613,11 @@ private:
     rigui::PedalboardPanel m_pedalPanel;
     rigui::AmpPanel m_ampPanel;
     juce::TextButton m_prev, m_next;
-    juce::ComboBox m_ampBox;
+    rigui::ClickCombo m_ampBox;
 
     juce::Label m_headTitle, m_cabTitle, m_aLabel, m_bLabel, m_micALabel, m_micBLabel, m_breakupLabel;
-    juce::ComboBox m_typeA, m_typeB;
+    rigui::ClickCombo m_typeA, m_typeB;
+    MatchLight m_match;
     juce::ToggleButton m_cabOn, m_classic;
     juce::Slider m_micA, m_micB, m_breakup;
 };

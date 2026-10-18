@@ -152,6 +152,12 @@ d_drive_boost = 1.0; d_bplus = 1.0;
 
   notice_show = 0;
 
+// Output limiter: rides gain down to the ceiling instead of hard clipping.
+// Presence + cab add ~6 dB after the PA, so a clamp here squares off the
+// cab-voiced signal and sounds like a blown speaker.
+lim.lms_lim_init();
+lim.lms_lim_set(-0.5, 80);
+
 @slider
 in_level = 10 ^ (slider1 / 20);
 gain = slider2 / 100;
@@ -371,8 +377,8 @@ cab_dual ? (
 );
 
 amp_out *= out_level;
-// Brickwall output limiter — transparent safety ceiling
-amp_out = max(-0.95, min(0.95, amp_out));
+lim.lms_lim_proc(amp_out, amp_out);
+amp_out = lim.out_l;
 spl0 = amp_out;
 spl1 = amp_out;
 

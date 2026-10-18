@@ -27,6 +27,18 @@ public:
     void drawToggleButton(juce::Graphics &, juce::ToggleButton &, bool highlighted, bool down) override;
 };
 
+// Opens its list on a click (on release) instead of needing press-and-hold
+class ClickCombo final : public juce::ComboBox {
+public:
+    void mouseDown(const juce::MouseEvent &) override {}
+    void mouseDrag(const juce::MouseEvent &) override {}
+    void mouseUp(const juce::MouseEvent &e) override
+    {
+        if (isEnabled() && reallyContains(e.getEventRelativeTo(this).getPosition(), true))
+            showPopup();
+    }
+};
+
 // One JSFX slider shown as a knob, an on/off switch, or a selector
 class ParamControl final : public juce::Component {
 public:
@@ -47,7 +59,7 @@ private:
     juce::Label m_label;
     juce::Slider m_slider;
     juce::ToggleButton m_button;
-    juce::ComboBox m_combo;
+    ClickCombo m_combo;
 };
 
 // Satan's Little Pedal Board below its header: comp strips, flow order, stompboxes
