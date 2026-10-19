@@ -2,7 +2,7 @@ desc:LMS - MEGA INCREASINATOR (FET / Opto / VCA Comps into a Brick-Wall Limiter)
 //tags: limiter maximizer mastering compressor density
 //author: LMS
 //version: 2.0
-//changelog: v2.0 — every LMS comp circuit in one box: Big Krush FET, Silver 69 opto (and DrumBanger's lite cell), RTW VCA, in series ahead of the reactive EQ and the brick-wall. Opto Pre-Limit is now the opto's mix; the opto has its own switch and controls.
+//changelog: v2.0 — every LMS comp circuit in one box: Big Krush FET, Silver 69 opto, RTW VCA, in series ahead of the reactive EQ and the brick-wall. Opto Pre-Limit is now the opto's mix; the opto has its own switch and controls.
 //license: GPL-3.0
 filename:0,shakebot_logo.png
 
@@ -29,11 +29,11 @@ slider14:250<50,2500,10>-FET Release (ms)
 slider15:0<-12,24,0.1>-FET Output (dB)
 slider16:0<0,2,1{Clean,Tape,Tube}>-FET Drive
 slider17:100<0,100,1>-FET Mix (%)
-// OPTO: Silver Sixty Nine's T4B cell; Drum is DrumBanger's feedforward lite cell
+// OPTO: Silver Sixty Nine's T4B cell
 slider18:0<0,1,1{Off,On}>-OPTO
 slider19:50<0,100,1>-Opto Peak Reduction (%)
 slider20:0<-12,24,0.1>-Opto Gain (dB)
-slider21:0<0,2,1{Compress,Limit,Drum}>-Opto Mode
+slider21:0<0,1,1{Compress,Limit}>-Opto Mode
 slider22:50<0,100,1>-Opto Emphasis (%)
 slider23:0<0,100,1>-Opto Warmth (%)
 // VCA: RTW's bus comp (auto release, sidechain HPF, parallel mix)
@@ -54,7 +54,6 @@ slider32:100<0,100,1>-VCA Mix (%)
   fet_sat_l.lms_sat_warm_init();
   fet_sat_r.lms_sat_warm_init();
   opto.lms_opto_init();
-  opto_lite.lms_opto_lite_init();
   vca.lms_comp_init();
   vca_sc.lms_bq_init();
   vca_sc_hz = 0;
@@ -88,7 +87,6 @@ slider32:100<0,100,1>-VCA Mix (%)
     opto_mode = slider21;
     opto_blend = slider6 / 100;
     opto.lms_opto_set(slider19 / 100, opto_mode == 1, slider22 / 100, slider23 / 100);
-    opto_lite.lms_opto_lite_set(slider19 / 100);
     opto_gain = lms_db2lin(slider20);
     opto_warmth = slider23 / 100;
 
@@ -494,21 +492,14 @@ gmem[G_MEGA_BUS + 19] = req_air_db;
 
     opto_on ? (
       dl = cl; dr = cr;
-      opto_mode == 2 ? (
-        opto_lite.lms_opto_lite_proc(cl, cr);
-        opto_g = opto_lite.gr;
-        m_opto_gr = opto_lite.gr_db;
-      ) : (
-        opto_warmth > 0.01 ? (
-          cl = opto.sat_l.lms_sat_warm(cl, opto_warmth * 0.15, 0.0);
-          cr = opto.sat_r.lms_sat_warm(cr, opto_warmth * 0.15, 0.0);
-        );
-        opto.lms_opto_proc(cl, cr);
-        opto_g = opto.gr;
-        m_opto_gr = opto.gr_db;
+      opto_warmth > 0.01 ? (
+        cl = opto.sat_l.lms_sat_warm(cl, opto_warmth * 0.15, 0.0);
+        cr = opto.sat_r.lms_sat_warm(cr, opto_warmth * 0.15, 0.0);
       );
-      cl *= opto_g * opto_gain;
-      cr *= opto_g * opto_gain;
+      opto.lms_opto_proc(cl, cr);
+      m_opto_gr = opto.gr_db;
+      cl *= opto.gr * opto_gain;
+      cr *= opto.gr * opto_gain;
       cl = dl + opto_blend * (cl - dl);
       cr = dr + opto_blend * (cr - dr);
     ) : m_opto_gr = 0;
@@ -981,7 +972,7 @@ gfx_setfont(1, "Arial", F_TINY);
 status_x = d_bx + d_bar_w + floor(15 * S);
 status_y = density_y + floor(26 * S);
 
-opto_on && opto_mode < 2 ? (
+opto_on ? (
   // Show opto photocell state
   gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
   gfx_x = status_x; gfx_y = status_y;
@@ -1179,7 +1170,7 @@ cy += bar_sp;
 _old = slider20; slider20 = draw_bar(sx + pad, cy, st_bw, bar_h, slider20, -12, 24, "Gain", 1);
 slider20 != _old ? slider_automate(2^19);
 cy += bar_sp;
-_old = slider21; slider21 = lms_draw_mode_sel4(sx + pad, cy, st_bw, bar_h, slider21, 2, "Mode", "Comp", "Limit", "Drum", "");
+_old = slider21; slider21 = lms_draw_mode_sel2(sx + pad, cy, st_bw, bar_h, slider21, 1, "Mode", "Comp", "Limit");
 slider21 != _old ? slider_automate(2^20);
 cy += bar_sp;
 _old = slider22; slider22 = draw_bar(sx + pad, cy, st_bw, bar_h, slider22, 0, 100, "Emphasis", 1);
