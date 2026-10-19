@@ -210,6 +210,12 @@ void RigProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuff
 {
     juce::ScopedNoDenormals noDenormals;
     runChild(m_pedals, buffer, midi, false);
+
+    float pk = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        pk = juce::jmax(pk, buffer.getMagnitude(ch, 0, buffer.getNumSamples()));
+    for (float old = ampInPeak.load(); pk > old && !ampInPeak.compare_exchange_weak(old, pk);) {}
+
     runChild(m_amp, buffer, midi, true);
     if (stripOn)
         runChild(m_strip, buffer, midi, false);
@@ -432,6 +438,70 @@ struct MatchLight : juce::Component {
     }
 };
 
+// Pedalboard out -> amp in: peak meter with a latching CLIP light (click to clear)
+struct InputMeter : juce::Component {
+    float level = 0.0f;  // displayed peak, linear
+    int clipTicks = 0;   // timer ticks the CLIP light stays lit
+
+    void push(float peak)
+    {
+        level = juce::jmax(peak, level * 0.82f);  // ~15 Hz ticks: falls ~20 dB/s
+        if (peak >= 1.0f)
+            clipTicks = 45;  // 3 s
+        else if (clipTicks > 0)
+            --clipTicks;
+        repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent &) override
+    {
+        clipTicks = 0;
+        repaint();
+    }
+
+    void paint(juce::Graphics &g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour(rigui::kDim);
+        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        g.drawText("AMP IN", r.removeFromLeft(60.0f), juce::Justification::centredLeft);
+
+        // CLIP light on the right
+        auto clip = r.removeFromRight(64.0f).reduced(2.0f, 4.0f);
+        const bool lit = clipTicks > 0;
+        g.setColour(lit ? juce::Colour(0xffe02020) : juce::Colour(0xff2a2222));
+        g.fillRoundedRectangle(clip, 4.0f);
+        g.setColour(lit ? juce::Colours::white : rigui::kDim);
+        g.drawText("CLIP", clip, juce::Justification::centred);
+        r.removeFromRight(8.0f);
+
+        // dB readout
+        const float db = level > 1e-6f ? 20.0f * std::log10(level) : -100.0f;
+        g.setColour(db >= 0.0f ? juce::Colour(0xffe02020) : rigui::kText);
+        g.drawText(db > -60.0f ? juce::String(db, 1) + " dB" : juce::String("-inf"), r.removeFromRight(66.0f),
+                   juce::Justification::centredRight);
+        r.removeFromRight(8.0f);
+
+        // bar: -48..+6 dBFS, green to -6, amber to 0, red above
+        auto bar = r.reduced(0.0f, 9.0f);
+        auto x = [&](float d) { return bar.getX() + bar.getWidth() * (d + 48.0f) / 54.0f; };
+        g.setColour(juce::Colour(0xff141010));
+        g.fillRoundedRectangle(bar, 3.0f);
+        const float fill = juce::jlimit(-48.0f, 6.0f, db);
+        auto seg = [&](float from, float to, juce::Colour c) {
+            if (fill > from)
+                g.setColour(c), g.fillRect(juce::Rectangle<float>(x(from), bar.getY(), x(juce::jmin(fill, to)) - x(from), bar.getHeight()));
+        };
+        seg(-48.0f, -6.0f, juce::Colour(0xff3fbf5f));
+        seg(-6.0f, 0.0f, juce::Colour(0xffe0a020));
+        seg(0.0f, 6.0f, juce::Colour(0xffe02020));
+        g.setColour(rigui::kText.withAlpha(0.6f));
+        g.fillRect(x(0.0f), bar.getY() - 3.0f, 1.5f, bar.getHeight() + 6.0f);  // 0 dBFS mark
+        g.setColour(juce::Colours::black.withAlpha(0.6f));
+        g.drawRoundedRectangle(bar, 3.0f, 1.0f);
+    }
+};
+
 class RigEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit RigEditor(RigProcessor &p)
@@ -501,6 +571,7 @@ public:
         m_classic.setButtonText("Classic view");
         m_classic.setToggleState(m_proc.classicView, juce::dontSendNotification);
         m_classic.onClick = [this] { m_proc.classicView = m_classic.getToggleState(); applyView(); };
+        m_content.addAndMakeVisible(m_inMeter);
         for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_match, &m_cabOn, &m_classic})
             m_content.addAndMakeVisible(c);
 
@@ -607,6 +678,8 @@ private:
         const int tabW = 220;
         for (int i = 0; i < 3; ++i)
             m_tabs[i].setBounds(20 + i * (tabW + 8), kPedalHeight + 10, tabW, kTabH - 12);
+        const int meterX = 20 + 3 * (tabW + 8) + 16;
+        m_inMeter.setBounds(meterX, kPedalHeight + 8, kAmpArea - 20 - meterX, kTabH - 8);
         layoutView(m_ampView, m_proc.amp());
         layoutView(m_stripView, m_proc.strip());
         layoutView(m_masterView, m_proc.master());
@@ -737,6 +810,7 @@ private:
             m_masterPanel.sendLookAndFeelChange();
             updateTabs();
         }
+        m_inMeter.push(m_proc.ampInPeak.exchange(0.0f));
         m_match.set(m_loadVar ? *m_loadVar : 0.0, m_tapVar ? *m_tapVar : 0.0);
         if (m_proc.pollCabFromAmp())
             refreshCab();
@@ -769,6 +843,7 @@ private:
     juce::Label m_headTitle, m_cabTitle, m_aLabel, m_bLabel, m_micALabel, m_micBLabel, m_breakupLabel;
     rigui::ClickCombo m_typeA, m_typeB;
     MatchLight m_match;
+    InputMeter m_inMeter;
     juce::ToggleButton m_cabOn, m_classic;
     juce::Slider m_micA, m_micB, m_breakup;
 };

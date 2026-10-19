@@ -26,6 +26,10 @@ public:
     YsfxProcessor &strip() { return m_strip; }
     YsfxProcessor &master() { return m_master; }
 
+    // peak of the pedalboard's output, i.e. what hits the amp input; the UI
+    // takes it with exchange(0) so nothing between two reads is missed
+    std::atomic<float> ampInPeak{0.0f};
+
     // the post-amp stages are in the chain only when switched in
     std::atomic<bool> stripOn{false}, masterOn{false};
 
