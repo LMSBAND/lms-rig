@@ -19,7 +19,7 @@ slider24:50<0,100,1>-Jump Mix (%)
 slider4:50<0,100,1>-Bass (%)
 slider5:50<0,100,1>-Treble (%)
 slider6:50<0,100,1>-Tone Cut (%)
-slider7:50<0,100,1>-Master (%)
+slider7:50<0,100,1>-Normal Master (%)
 slider8:50<0,100,1>-Input Stage (%)
 slider9:50<0,100,1>-PSU Sag (%)
 slider10:-12<-24,24,0.1>-Output Level (dB)
@@ -46,6 +46,8 @@ slider25:100<0,100,1>-Speaker Breakup (%)
 slider26:0<0,1,1{Off,On}>-Bright
 // --- IMPEDANCE TAP ---
 slider20:2<0,2,1{4 ohm,8 ohm,16 ohm}>-Impedance Tap
+slider27:50<0,100,1>-Top Boost Master (%)
+slider28:50<0,100,1>-Jumped Master (%)
 
 @init
 
@@ -153,7 +155,7 @@ channel = slider3;
 jump_mix = slider24 / 100;
 tb.lms_topboost_set(slider4/100, slider5/100);
 tonecut = slider6 / 100;
-master = slider7 / 100;
+master = (slider3 == 0 ? slider7 : (slider3 == 1 ? slider27 : slider28)) / 100;  // each channel has its own master
 pa.poweramp_set(master, tonecut);
 input_intensity = slider8 / 100;
 sag_depth = slider9 / 100;
@@ -215,7 +217,7 @@ channel = slider3;
 jump_mix = slider24 / 100;
 tb.lms_topboost_set(slider4/100, slider5/100);
 tonecut = slider6 / 100;
-master = slider7 / 100;
+master = (slider3 == 0 ? slider7 : (slider3 == 1 ? slider27 : slider28)) / 100;  // each channel has its own master
 pa.poweramp_set(master, tonecut);
 input_intensity = slider8 / 100;
 sag_depth = slider9 / 100;
@@ -513,8 +515,17 @@ cy += bar_sp;
 _old = slider6; slider6 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider6, 0, 100, "Tone Cut", 1);
 slider6 != _old ? slider_automate(2^5);
 cy += bar_sp;
-_old = slider7; slider7 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider7, 0, 100, "Master", 1);
-slider7 != _old ? slider_automate(2^6);
+// Master bar edits the selected channel's own master
+slider3 == 0 ? (
+  _old = slider7; slider7 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider7, 0, 100, "Normal Mstr", 1);
+  slider7 != _old ? slider_automate(2^6);
+) : slider3 == 1 ? (
+  _old = slider27; slider27 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider27, 0, 100, "Top Boost Mstr", 1);
+  slider27 != _old ? slider_automate(2^26);
+) : slider3 == 2 ? (
+  _old = slider28; slider28 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider28, 0, 100, "Jumped Mstr", 1);
+  slider28 != _old ? slider_automate(2^27);
+);
 cy += bar_sp;
 _old = slider10; slider10 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider10, -24, 24, "Output dB", 1);
 slider10 != _old ? slider_automate(2^9);

@@ -577,7 +577,7 @@ int ampSection(const juce::String &n)
         return 6;
     if (n == "FX Bypass" || n.contains("Echo") || n.contains("Reverb") || n.startsWith("Tremolo"))
         return 3;
-    if (n.startsWith("PSU") || n.startsWith("Master") || n.startsWith("Output Level") || n == "Impedance Tap" || n == "Noise Gate")
+    if (n.startsWith("PSU") || n.contains("Master") || n.startsWith("Output Level") || n == "Impedance Tap" || n == "Noise Gate")
         return 2;
     for (auto *t : {"Bass", "Mid", "Treble", "Presence", "Tone", "Resonance", "Low ", "High ", "Ultra", "Jump Mix"})
         if (n.startsWith(t))

@@ -21,7 +21,7 @@ slider6:50<0,100,1>-High (%)
 slider7:50<0,100,1>-Post Gain (%)
 slider8:50<0,100,1>-Presence (%)
 slider9:50<0,100,1>-Resonance (%)
-slider10:50<0,100,1>-Master (%)
+slider10:50<0,100,1>-Clean Master (%)
 slider11:50<0,100,1>-Input Stage (%)
 slider12:25<0,100,1>-PSU Sag (%)
 slider13:-12<-24,24,0.1>-Output Level (dB)
@@ -46,6 +46,7 @@ slider23:0<0,100,1>-Mic B Distance (%)
 // --- IMPEDANCE TAP ---
 slider28:100<0,100,1>-Speaker Breakup (%)
 slider24:2<0,2,1{4 ohm,8 ohm,16 ohm}>-Impedance Tap
+slider29:50<0,100,1>-Lead Master (%)
 
 @init
 
@@ -184,7 +185,7 @@ bright_cap.lms_bq_set_hishelf(2000, (1.0 - gain) * (1.0 - gain) * 4.0, 0.7);
 channel = slider3;
 ts.lms_tmb_set(slider4/100, slider5/100, slider6/100);
 post_gain = slider7 / 100;
-master = slider10 / 100;
+master = (slider3 == 0 ? slider10 : slider29) / 100;  // each channel has its own master
 pa.poweramp_set(master, slider8/100, slider9/100);
 // PA crossover deadzone: on for Lead (5150 sputter), OFF for Clean (kills tail fall-apart)
 pa.pa_has_deadzone = channel == 1 ? 1 : 0;
@@ -249,7 +250,7 @@ bright_cap.lms_bq_set_hishelf(2000, (1.0 - gain) * (1.0 - gain) * 4.0, 0.7);
 channel = slider3;
 ts.lms_tmb_set(slider4/100, slider5/100, slider6/100);
 post_gain = slider7 / 100;
-master = slider10 / 100;
+master = (slider3 == 0 ? slider10 : slider29) / 100;  // each channel has its own master
 pa.poweramp_set(master, slider8/100, slider9/100);
 // PA crossover deadzone: on for Lead (5150 sputter), OFF for Clean (kills tail fall-apart)
 pa.pa_has_deadzone = channel == 1 ? 1 : 0;
@@ -582,8 +583,14 @@ cy += bar_sp;
 _old = slider9; slider9 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider9, 0, 100, "Resonance", 1);
 slider9 != _old ? slider_automate(2^8);
 cy += bar_sp;
-_old = slider10; slider10 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider10, 0, 100, "Master", 1);
-slider10 != _old ? slider_automate(2^9);
+// Master bar edits the selected channel's own master
+slider3 == 0 ? (
+  _old = slider10; slider10 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider10, 0, 100, "Clean Mstr", 1);
+  slider10 != _old ? slider_automate(2^9);
+) : slider3 == 1 ? (
+  _old = slider29; slider29 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider29, 0, 100, "Lead Mstr", 1);
+  slider29 != _old ? slider_automate(2^28);
+);
 cy += bar_sp;
 _old = slider13; slider13 = lms_draw_bar(c2x + pad, cy, col_w - pad2, bar_h, slider13, -24, 24, "Output dB", 1);
 slider13 != _old ? slider_automate(2^12);
