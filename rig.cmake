@@ -19,6 +19,8 @@ juce_add_plugin(lms_rig
 file(GLOB LMS_RIG_JSFX
     "${LMS_RIG_DIR}/jsfx/lms_*_v2.jsfx"
     "${LMS_RIG_DIR}/jsfx/lms_satans_pedalboard.jsfx"
+    "${LMS_RIG_DIR}/jsfx/lms_rtw.jsfx"
+    "${LMS_RIG_DIR}/jsfx/lms_mega_increasinator.jsfx"
     "${LMS_RIG_DIR}/jsfx/lms_core.jsfx-inc"
     "${LMS_RIG_DIR}/jsfx/shakebot_logo.png")
 juce_add_binary_data(lms_rig_jsfx NAMESPACE LmsRigData SOURCES ${LMS_RIG_JSFX})

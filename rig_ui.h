@@ -44,6 +44,7 @@ class ParamControl final : public juce::Component {
 public:
     ParamControl(YsfxParameter *p, const juce::String &label, juce::Colour accent);
     void makeFootswitch();
+    void hideLabel();
     void sync();
     double value() const;
     bool isSwitch() const { return m_kind == toggle; }
@@ -56,6 +57,7 @@ private:
 
     YsfxParameter *m_param;
     Kind m_kind = knob;
+    bool m_noLabel = false;
     juce::Label m_label;
     juce::Slider m_slider;
     juce::ToggleButton m_button;
@@ -102,6 +104,45 @@ public:
 private:
     std::vector<std::unique_ptr<Section>> m_sections;
     juce::String m_title, m_subtitle;
+};
+
+// A post-amp rack unit (RTW, Mega Increasinator): sections of controls bound by
+// slider name, each optionally with an in/out switch and a gain-reduction meter
+// read straight from a JSFX variable.
+struct RackSectionDef {
+    const char *title;
+    const char *switchName;  // On/Off slider drawn in the title bar, or nullptr
+    const char *meterVar;    // JSFX variable holding GR in dB (either sign), or nullptr
+    const char *prefix;      // stripped from slider names for the knob labels
+    std::vector<const char *> sliders;  // "Slider Name" or "Slider Name|Label"
+};
+
+struct RackReadout {
+    const char *label, *var;
+    bool linear;  // var is a linear amplitude, shown in dB
+};
+
+class RackPanel final : public juce::Component {
+public:
+    RackPanel(std::vector<RackSectionDef> defs, std::vector<RackReadout> readouts, juce::Colour accent);
+    ~RackPanel() override;
+    void build(YsfxProcessor &fx);
+    void sync();
+    void paint(juce::Graphics &) override;
+    void resized() override;
+
+    juce::ToggleButton &inChain() { return m_inChain; }
+
+    struct Section;
+private:
+    std::vector<RackSectionDef> m_defs;
+    std::vector<RackReadout> m_readouts;
+    std::vector<const double *> m_readoutVars;
+    juce::Colour m_accent;
+    std::vector<std::unique_ptr<Section>> m_sections;
+    juce::String m_title, m_subtitle;
+    juce::ToggleButton m_inChain;
+    juce::Rectangle<int> m_readoutArea;
 };
 
 } // namespace rigui

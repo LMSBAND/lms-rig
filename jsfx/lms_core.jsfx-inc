@@ -637,6 +637,8 @@ function lms_comp_init()
   this.ratio = 4;
   this.att = 0;
   this.rel = 0;
+  this.rel_fast = exp(-1 / (0.050 * srate));  // auto-release: transient recovery
+  this.rel_slow = exp(-1 / (0.600 * srate));  // auto-release: sustained compression
 );
 
 // Set compressor parameters
@@ -664,6 +666,26 @@ function lms_comp_proc(l, r)
     this.env = this.att * this.env + (1 - this.att) * target_gr;
   ) : (
     this.env = this.rel * this.env + (1 - this.rel) * target_gr;
+  );
+  this.gr = 10 ^ (-this.env / 20);
+  this.gr_db = this.env;
+);
+
+// Same, with the SSL-style auto release when auto_rel is set: 50 ms while
+// more than 6 dB down (transients recover fast), 600 ms below that (sustained
+// compression doesn't pump). Feed it a filtered sidechain for an SC HPF.
+function lms_comp_proc_ar(l, r, auto_rel)
+  local(det, det_db, over, target_gr, rel_coeff)
+(
+  det = max(abs(l), abs(r));
+  det_db = det > 0.0000001 ? 20 * log10(det) : -140;
+  over = det_db - this.thresh;
+  target_gr = over > 0 ? over - over / this.ratio : 0;
+  target_gr > this.env ? (
+    this.env = this.att * this.env + (1 - this.att) * target_gr;
+  ) : (
+    rel_coeff = !auto_rel ? this.rel : this.env > 6 ? this.rel_fast : this.rel_slow;
+    this.env = rel_coeff * this.env + (1 - rel_coeff) * target_gr;
   );
   this.gr = 10 ^ (-this.env / 20);
   this.gr_db = this.env;

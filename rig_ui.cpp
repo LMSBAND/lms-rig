@@ -223,6 +223,12 @@ void ParamControl::makeFootswitch()
     m_label.setVisible(false);
 }
 
+void ParamControl::hideLabel()
+{
+    m_noLabel = true;
+    m_label.setVisible(false);
+}
+
 double ParamControl::value() const
 {
     return m_param->convertToYsfxValue(m_param->getValue());
@@ -258,7 +264,8 @@ void ParamControl::resized()
         m_button.setBounds(b);
         return;
     }
-    m_label.setBounds(b.removeFromTop(16));
+    if (!m_noLabel)
+        m_label.setBounds(b.removeFromTop(16));
     switch (m_kind) {
     case knob:
         m_slider.setBounds(b);
@@ -709,6 +716,247 @@ void AmpPanel::resized()
             x += s->width() + kSectionGap;
         }
         y += kSectionH + kSectionGap;
+    }
+}
+
+//==============================================================================
+// Rack units
+
+namespace {
+constexpr int kRackHeader = 84;
+constexpr int kRackSectionH = 140, kRackTitle = 26, kRackPad = 12, kRackGap = 12;
+constexpr int kRackKnobW = 80, kRackSwitchW = 78, kRackChoiceW = 124, kRackMeterW = 34;
+
+int controlWidth(const ParamControl &c)
+{
+    return c.isChoice() ? kRackChoiceW : c.isSwitch() ? kRackSwitchW : kRackKnobW;
+}
+} // namespace
+
+struct RackPanel::Section {
+    juce::String title;
+    std::unique_ptr<ParamControl> sw;
+    std::vector<std::unique_ptr<ParamControl>> controls;
+    const double *meter = nullptr;
+    juce::Rectangle<int> bounds;
+    bool lastOn = true;
+    double lastMeter = 0;
+
+    bool on() const { return !sw || sw->value() > 0.5; }
+
+    int width() const
+    {
+        int w = kRackPad * 2 + (meter ? kRackMeterW : 0);
+        for (auto &c : controls)
+            w += controlWidth(*c);
+        return w;
+    }
+
+    juce::Rectangle<int> meterBounds() const
+    {
+        return bounds.reduced(kRackPad, 10).withTrimmedTop(kRackTitle).removeFromRight(kRackMeterW).withTrimmedLeft(12);
+    }
+};
+
+RackPanel::RackPanel(std::vector<RackSectionDef> defs, std::vector<RackReadout> readouts, juce::Colour accent)
+    : m_defs(std::move(defs)), m_readouts(std::move(readouts)), m_accent(accent)
+{
+    m_inChain.setButtonText("IN CHAIN");
+    m_inChain.setColour(juce::ToggleButton::tickColourId, accent);
+    addAndMakeVisible(m_inChain);
+}
+
+RackPanel::~RackPanel() = default;
+
+void RackPanel::build(YsfxProcessor &fx)
+{
+    m_sections.clear();
+    m_readoutVars.clear();
+    m_title.clear();
+    m_subtitle.clear();
+
+    auto info = fx.getCurrentInfo();
+    ysfx_t *eff = info ? info->effect.get() : nullptr;
+    if (eff) {
+        // "LMS - MEGA INCREASINATOR (FET / Opto / VCA ...)", "LMS RTW (LMS Reinvents The Wheel)"
+        juce::String desc = juce::CharPointer_UTF8(ysfx_get_name(eff));
+        juce::String head = desc.upToFirstOccurrenceOf("(", false, false).trim();
+        head = head.fromFirstOccurrenceOf("LMS - ", false, false).trim().isNotEmpty()
+                   ? head.fromFirstOccurrenceOf("LMS - ", false, false).trim()
+                   : head.fromFirstOccurrenceOf("LMS ", false, false).trim();
+        m_title = (head.isNotEmpty() ? head : desc).toUpperCase();
+        if (desc.contains("("))
+            m_subtitle = desc.fromFirstOccurrenceOf("(", false, false).upToLastOccurrenceOf(")", false, false);
+    }
+
+    const auto sliders = listSliders(fx);
+    auto find = [&](const juce::String &name) -> YsfxParameter * {
+        for (auto &[i, n] : sliders)
+            if (n == name)
+                return fx.getYsfxParameter(i);
+        return nullptr;
+    };
+
+    for (auto &def : m_defs) {
+        auto sec = std::make_unique<Section>();
+        sec->title = def.title;
+        if (def.switchName)
+            if (auto *p = find(def.switchName)) {
+                sec->sw = std::make_unique<ParamControl>(p, juce::String(), m_accent);
+                sec->sw->hideLabel();
+                addAndMakeVisible(*sec->sw);
+            }
+        if (def.meterVar && eff)
+            sec->meter = ysfx_find_var(eff, def.meterVar);
+        for (const char *entry : def.sliders) {
+            juce::String name = juce::String(entry).upToFirstOccurrenceOf("|", false, false);
+            juce::String label = juce::String(entry).fromFirstOccurrenceOf("|", false, false);
+            auto *p = find(name);
+            if (!p)
+                continue;
+            if (label.isEmpty())
+                label = bareName(name, def.prefix ? def.prefix : "");
+            auto c = std::make_unique<ParamControl>(p, label, m_accent);
+            addAndMakeVisible(*c);
+            sec->controls.push_back(std::move(c));
+        }
+        sec->lastOn = sec->on();
+        if (!sec->controls.empty() || sec->sw)
+            m_sections.push_back(std::move(sec));
+    }
+    for (auto &r : m_readouts)
+        m_readoutVars.push_back(eff ? ysfx_find_var(eff, r.var) : nullptr);
+
+    resized();
+    repaint();
+}
+
+void RackPanel::sync()
+{
+    for (auto &s : m_sections) {
+        if (s->sw)
+            s->sw->sync();
+        for (auto &c : s->controls)
+            c->sync();
+        const bool on = s->on();
+        if (on != s->lastOn) {
+            s->lastOn = on;
+            for (auto &c : s->controls)
+                c->setAlpha(on ? 1.0f : 0.45f);
+            repaint(s->bounds);
+        }
+        if (s->meter && std::abs(*s->meter - s->lastMeter) > 0.05) {
+            s->lastMeter = *s->meter;
+            repaint(s->meterBounds().expanded(2, 16));
+        }
+    }
+    if (!m_readouts.empty())
+        repaint(m_readoutArea);
+}
+
+void RackPanel::paint(juce::Graphics &g)
+{
+    auto b = getLocalBounds().toFloat().reduced(10.0f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1f1c22), 0, b.getY(), juce::Colour(0xff0e0c10), 0, b.getBottom(), false));
+    g.fillRoundedRectangle(b, 12.0f);
+    g.setColour(m_accent.withAlpha(0.55f));
+    g.drawRoundedRectangle(b, 12.0f, 2.0f);
+
+    auto head = b.removeFromTop((float)kRackHeader).reduced(28.0f, 14.0f);
+    g.setColour(m_accent.brighter(0.25f));
+    g.setFont(juce::FontOptions(34.0f, juce::Font::bold));
+    g.drawText(m_title, head.removeFromTop(38.0f), juce::Justification::centredLeft);
+    g.setColour(kDim);
+    g.setFont(juce::FontOptions(15.0f, juce::Font::italic));
+    g.drawText(m_subtitle, head, juce::Justification::centredLeft);
+
+    // readouts (loudness etc.), right-aligned in the header left of IN CHAIN
+    auto ro = m_readoutArea;
+    for (size_t i = 0; i < m_readouts.size(); ++i) {
+        auto cell = ro.removeFromLeft(ro.getWidth() / (int)(m_readouts.size() - i)).toFloat();
+        const double *v = m_readoutVars[i];
+        double x = v ? *v : 0.0;
+        if (m_readouts[i].linear)
+            x = x > 1e-6 ? 20.0 * std::log10(x) : -120.0;
+        g.setColour(kDim);
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        g.drawText(m_readouts[i].label, cell.removeFromTop(16.0f), juce::Justification::centred);
+        g.setColour(kText);
+        g.setFont(juce::FontOptions(22.0f, juce::Font::bold));
+        g.drawText(v && x > -69.0 ? juce::String(x, 1) : juce::String("--"), cell, juce::Justification::centred);
+    }
+
+    for (auto &s : m_sections) {
+        const bool on = s->on();
+        auto r = s->bounds.toFloat();
+        g.setColour(juce::Colours::black.withAlpha(0.28f));
+        g.fillRoundedRectangle(r, 8.0f);
+        g.setColour(m_accent.withAlpha(on ? 0.35f : 0.12f));
+        g.drawRoundedRectangle(r, 8.0f, 1.0f);
+        g.setColour(on ? m_accent : kDim);
+        g.fillRect(r.getX() + 12.0f, r.getY() + 9.0f, 3.0f, 12.0f);
+        g.setColour(kText.withAlpha(on ? 0.85f : 0.4f));
+        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        g.drawText(s->title, r.withHeight((float)kRackTitle + 4).withTrimmedLeft(22.0f), juce::Justification::centredLeft);
+
+        if (s->meter) {
+            // gain reduction falls from the top, 0..24 dB
+            auto m = s->meterBounds().toFloat();
+            auto bar = m.withTrimmedBottom(18.0f);
+            const double gr = juce::jlimit(0.0, 24.0, std::abs(*s->meter));
+            g.setColour(juce::Colour(0xff141014));
+            g.fillRoundedRectangle(bar, 3.0f);
+            g.setColour(on ? m_accent : kDim);
+            g.fillRoundedRectangle(bar.withHeight(bar.getHeight() * (float)(gr / 24.0)), 3.0f);
+            g.setColour(juce::Colours::black.withAlpha(0.6f));
+            g.drawRoundedRectangle(bar, 3.0f, 1.0f);
+            g.setColour(kText.withAlpha(0.8f));
+            g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+            g.drawText(gr < 0.05 ? juce::String("0.0") : juce::String(-gr, gr >= 10.0 ? 0 : 1), m.removeFromBottom(16.0f).expanded(6.0f, 0.0f),
+                       juce::Justification::centred);
+        }
+    }
+}
+
+void RackPanel::resized()
+{
+    auto hdr = getLocalBounds().reduced(10).removeFromTop(kRackHeader).reduced(28, 18);
+    m_inChain.setBounds(hdr.removeFromRight(130).withSizeKeepingCentre(130, 30));
+    hdr.removeFromRight(20);
+    m_readoutArea = hdr.removeFromRight(90 * (int)m_readouts.size());
+
+    auto area = getLocalBounds().reduced(30, 20).withTrimmedTop(kRackHeader);
+
+    // greedy rows, each centred
+    std::vector<std::vector<Section *>> rows(1);
+    int rowW = 0;
+    for (auto &s : m_sections) {
+        const int w = s->width();
+        if (!rows.back().empty() && rowW + kRackGap + w > area.getWidth()) {
+            rows.emplace_back();
+            rowW = 0;
+        }
+        rowW += (rows.back().empty() ? 0 : kRackGap) + w;
+        rows.back().push_back(s.get());
+    }
+
+    const int totalH = (int)rows.size() * kRackSectionH + ((int)rows.size() - 1) * kRackGap;
+    int y = area.getY() + juce::jmax(0, (area.getHeight() - totalH) / 2);
+    for (auto &row : rows) {
+        int w = -kRackGap;
+        for (auto *s : row)
+            w += s->width() + kRackGap;
+        int x = area.getX() + (area.getWidth() - w) / 2;
+        for (auto *s : row) {
+            s->bounds = {x, y, s->width(), kRackSectionH};
+            if (s->sw)
+                s->sw->setBounds(s->bounds.getRight() - 40, s->bounds.getY() + 4, 30, 22);
+            auto inner = s->bounds.reduced(kRackPad, 8).withTrimmedTop(kRackTitle);
+            for (auto &c : s->controls)
+                c->setBounds(inner.removeFromLeft(controlWidth(*c)));
+            x += s->width() + kRackGap;
+        }
+        y += kRackSectionH + kRackGap;
     }
 }
 

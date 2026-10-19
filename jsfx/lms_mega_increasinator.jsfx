@@ -1,0 +1,1236 @@
+desc:LMS - MEGA INCREASINATOR (FET / Opto / VCA Comps into a Brick-Wall Limiter)
+//tags: limiter maximizer mastering compressor density
+//author: LMS
+//version: 2.0
+//changelog: v2.0 — every LMS comp circuit in one box: Big Krush FET, Silver 69 opto (and DrumBanger's lite cell), RTW VCA, in series ahead of the reactive EQ and the brick-wall. Opto Pre-Limit is now the opto's mix; the opto has its own switch and controls.
+//license: GPL-3.0
+filename:0,shakebot_logo.png
+
+import lms_core.jsfx-inc
+options:gmem=DrumBanger
+
+slider1:0<-12,12,0.1>-Input Gain (dB)
+slider2:-0.3<-3,0,0.1>-Ceiling (dBFS)
+slider3:0<0,24,0.1>-Target Loudness (dB)
+slider4:50<1,500,1>-Release (ms)
+slider5:0<-24,0,0.1>-Gain Reduction (dB)
+slider6:100<0,100,1>-Opto Mix (%)
+slider7:0<0,7,1{Off,Clean,Loud,Open,Pop,Hardcore,Hip-Hop,Punk}>-EQ Profile
+slider8:100<0,200,1>-EQ Intensity (%)
+slider9:0<0,300,1>-Lo Crossover (Hz) [0=Off]
+
+// The comp stages, in signal order. Each is one of the suite's own circuits.
+// FET: KITTY KATS BIG KRUSH (lms_comp, fast, with its tape/tube drive)
+slider10:0<0,1,1{Off,On}>-FET
+slider11:-12<-40,0,0.5>-FET Threshold (dB)
+slider12:0<0,4,1{4:1,8:1,12:1,20:1,Nuke}>-FET Ratio
+slider13:0.5<0.05,20,0.05>-FET Attack (ms)
+slider14:250<50,2500,10>-FET Release (ms)
+slider15:0<-12,24,0.1>-FET Output (dB)
+slider16:0<0,2,1{Clean,Tape,Tube}>-FET Drive
+slider17:100<0,100,1>-FET Mix (%)
+// OPTO: Silver Sixty Nine's T4B cell; Drum is DrumBanger's feedforward lite cell
+slider18:0<0,1,1{Off,On}>-OPTO
+slider19:50<0,100,1>-Opto Peak Reduction (%)
+slider20:0<-12,24,0.1>-Opto Gain (dB)
+slider21:0<0,2,1{Compress,Limit,Drum}>-Opto Mode
+slider22:50<0,100,1>-Opto Emphasis (%)
+slider23:0<0,100,1>-Opto Warmth (%)
+// VCA: RTW's bus comp (auto release, sidechain HPF, parallel mix)
+slider24:0<0,1,1{Off,On}>-VCA
+slider25:-18<-40,0,0.5>-VCA Threshold (dB)
+slider26:1<0,4,1{1.5:1,2:1,4:1,6:1,10:1}>-VCA Ratio
+slider27:10<0.1,30,0.1>-VCA Attack (ms)
+slider28:300<10,1200,5>-VCA Release (ms)
+slider29:0<0,1,1{Off,On}>-VCA Auto Release
+slider30:0<0,500,1>-VCA SC HPF (Hz) [0=Off]
+slider31:0<0,24,0.5>-VCA Makeup (dB)
+slider32:100<0,100,1>-VCA Mix (%)
+
+@init
+
+  lim.lms_lim_init();
+  fet.lms_comp_init();
+  fet_sat_l.lms_sat_warm_init();
+  fet_sat_r.lms_sat_warm_init();
+  opto.lms_opto_init();
+  opto_lite.lms_opto_lite_init();
+  vca.lms_comp_init();
+  vca_sc.lms_bq_init();
+  vca_sc_hz = 0;
+
+  // Density of what reaches the reactive EQ. It used to borrow the opto's
+  // tracker, which tied the EQ to the opto; it has its own now.
+  eq_hd.lms_hd_init(250, 2000, 5000);
+
+  // Gain reduction per stage in dB (<= 0), for the meters here and in LMS Rig
+  m_fet_gr = 0; m_opto_gr = 0; m_vca_gr = 0; m_lim_gr = 0;
+
+  // Read every control. Called from @slider and @block (GFX edits don't
+  // trigger @slider).
+  function mega_params() (
+    in_gain = lms_db2lin(slider1);
+    lim.lms_lim_set(slider2, slider4);
+    target_boost = lms_db2lin(slider3);
+    eq_profile = slider7;
+    eq_intensity = slider8 / 100;
+    xover_freq = slider9;
+    xover_freq > 0 ? xover.lms_xover_set(xover_freq);
+
+    fet_on = slider10;
+    fet_ratio = slider12 == 0 ? 4 : slider12 == 1 ? 8 : slider12 == 2 ? 12 : slider12 == 3 ? 20 : 100;
+    fet.lms_comp_set(slider11, fet_ratio, slider13, slider14);
+    fet_out = lms_db2lin(slider15);
+    fet_drive = slider16;
+    fet_mix = slider17 / 100;
+
+    opto_on = slider18;
+    opto_mode = slider21;
+    opto_blend = slider6 / 100;
+    opto.lms_opto_set(slider19 / 100, opto_mode == 1, slider22 / 100, slider23 / 100);
+    opto_lite.lms_opto_lite_set(slider19 / 100);
+    opto_gain = lms_db2lin(slider20);
+    opto_warmth = slider23 / 100;
+
+    vca_on = slider24;
+    vca_ratio = slider26 == 0 ? 1.5 : slider26 == 1 ? 2 : slider26 == 2 ? 4 : slider26 == 3 ? 6 : 10;
+    vca.lms_comp_set(slider25, vca_ratio, slider27, slider28);
+    vca_auto = slider29;
+    slider30 != vca_sc_hz ? (
+      vca_sc_hz = slider30;
+      vca_sc_hz > 0 ? vca_sc.lms_bq_set_hp(vca_sc_hz, 0.707);
+    );
+    vca_makeup = lms_db2lin(slider31);
+    vca_mix = slider32 / 100;
+  );
+  xover.lms_xover_init();
+  xover_freq = 0;
+
+  // Reactive EQ filter instances (4-band density-driven)
+  req_lo.lms_bq_init();     // low shelf 120 Hz — tighten bass
+  req_mid.lms_bq_init();    // peak EQ 3 kHz — control harshness
+  req_hi.lms_bq_init();     // peak EQ 5 kHz — presence/hi control
+  req_air.lms_bq_init();    // high shelf 10 kHz — restore sparkle
+
+  // Reactive EQ state
+  eq_profile = 0;
+  eq_intensity = 1.0;
+  req_lo_db = 0; req_mid_db = 0; req_hi_db = 0; req_air_db = 0;
+  req_lo_smooth = 0; req_mid_smooth = 0; req_hi_smooth = 0; req_air_smooth = 0;
+  adapted_release = 50;
+
+  notice_show = 0;
+  buy_show = 0;
+
+  // Local variables
+  in_gain = 1.0;
+  target_boost = 1.0;
+  opto_blend = 0;
+
+// ============================================================
+//  OUTPUT ANALYSER — read-only, never touches the audio path
+// ============================================================
+// Measures what leaves the limiter and publishes it for the LMS Plugin
+// Manager's metering page. Reads spl0/spl1 after they are written; changes
+// neither. Always on: it is ~20 biquads on a single master-bus instance,
+// and a meter that needs arming is a meter that reads zero when you look.
+
+  G_MEGA_BUS = 970000;
+  mega_hb = 0;
+
+  // ---- Loudness, ITU-R BS.1770-4 ----
+  // K-weighting: a +4 dB shelf at 1681.97 Hz into the RLB high-pass at
+  // 38.14 Hz. The coefficients come from the spec's own analog prototypes
+  // rather than from the generic RBJ designers in lms_core -- an RBJ high
+  // shelf with the same corner, gain and Q traces a slightly different curve
+  // through the 1-3 kHz transition (-0.26 dB at 997 Hz, -0.41 dB at 2 kHz),
+  // which is enough to miss the spec's calibration point. These reproduce the
+  // published 48 kHz coefficients to machine precision and, being derived
+  // rather than tabulated, stay correct at every other samplerate too.
+  // The core biquad still does the processing; only the coefficients differ.
+  kw_shelf.lms_bq_init();
+  kw_f0 = 1681.974450955533;
+  kw_K  = tan($pi * kw_f0 / srate);
+  kw_Q  = 0.7071752369554196;
+  kw_Vh = pow(10, 3.999843853973347 / 20);
+  kw_Vb = pow(kw_Vh, 0.4996667741545416);
+  kw_a0 = 1 + kw_K / kw_Q + kw_K * kw_K;
+  kw_shelf.b0 = (kw_Vh + kw_Vb * kw_K / kw_Q + kw_K * kw_K) / kw_a0;
+  kw_shelf.b1 = 2 * (kw_K * kw_K - kw_Vh) / kw_a0;
+  kw_shelf.b2 = (kw_Vh - kw_Vb * kw_K / kw_Q + kw_K * kw_K) / kw_a0;
+  kw_shelf.a1 = 2 * (kw_K * kw_K - 1) / kw_a0;
+  kw_shelf.a2 = (1 - kw_K / kw_Q + kw_K * kw_K) / kw_a0;
+
+  kw_hp.lms_bq_init();
+  kw_f0 = 38.13547087602444;
+  kw_K  = tan($pi * kw_f0 / srate);
+  kw_Q  = 0.5003270373238773;
+  kw_a0 = 1 + kw_K / kw_Q + kw_K * kw_K;
+  kw_hp.b0 = 1; kw_hp.b1 = -2; kw_hp.b2 = 1;
+  kw_hp.a1 = 2 * (kw_K * kw_K - 1) / kw_a0;
+  kw_hp.a2 = (1 - kw_K / kw_Q + kw_K * kw_K) / kw_a0;
+
+  // Loudness accumulates in 100 ms sub-blocks. Momentary is the mean of the
+  // last 4 (400 ms), short-term the mean of the last 30 (3 s). Advancing the
+  // 400 ms window one sub-block at a time is exactly the 75% overlap the spec
+  // asks for on the blocks that feed the integrated measurement.
+  LUFS_RING    = 910000;
+  LUFS_RING_N  = 30;
+  lufs_sub_len = max(1, floor(srate * 0.1));
+  lufs_sub_pos = 0; lufs_sub_sum = 0;
+  lufs_ring_pos = 0; lufs_ring_fill = 0;
+  memset(LUFS_RING, 0, LUFS_RING_N);
+
+  // Integrated cannot be a running mean: the relative gate sits 10 LU below
+  // the ungated mean, so a block's eligibility is unknown until every block
+  // has been seen. A 0.1 LU histogram from -70 to 0 LUFS keeps all of them in
+  // fixed memory instead of a list that grows with the session.
+  LUFS_HIST   = 911000;
+  LUFS_HIST_N = 700;
+  memset(LUFS_HIST, 0, LUFS_HIST_N);
+
+  lufs_m = -70; lufs_s = -70; lufs_i = -70;
+
+  // Output peak with a slow fall, so a transient stays readable at 30 fps.
+  out_peak = 0;
+  peak_decay = exp(-1 / (srate * 1.5));
+
+  // ---- Density of the output ----
+  // The reactive EQ reads eq_hd, which runs ahead of the EQ and reports on
+  // the signal BEFORE the brick-wall. This one is unconditional
+  // and sits on the output, which is what "the density of what is leaving" means.
+  out_hd.lms_hd_init(250, 2000, 5000);
+
+  // ---- 12-band analyser ----
+  // Log-spaced 40 Hz to 16 kHz, ~0.8 octave apart. Centres clamp below Nyquist
+  // so a 44.1 kHz project does not park a band on top of it.
+  // lms_bq_set_bp is the constant-skirt-gain form, whose peak gain IS Q. Left
+  // uncorrected every band would read a uniform 20*log10(1.7) = 4.6 dB hot,
+  // so the envelope is normalised by Q and the published dB means something.
+  BND_Q = 1.7;
+
+  function ana_band_init(f) (
+    this.fc = min(f, srate * 0.45);
+    this.bp.lms_bq_init();
+    this.bp.lms_bq_set_bp(this.fc, BND_Q);
+    this.env = 0;
+  );
+  function ana_band_proc(x) local(a) (
+    a = abs(this.bp.lms_bq_proc(x)) / BND_Q;
+    a > this.env ? (this.env = a) : (this.env = this.env * bnd_rel + a * (1 - bnd_rel));
+  );
+
+  bnd_rel = exp(-1 / (srate * 0.15));
+  b01.ana_band_init(40);   b02.ana_band_init(70);    b03.ana_band_init(120);
+  b04.ana_band_init(205);  b05.ana_band_init(355);   b06.ana_band_init(610);
+  b07.ana_band_init(1050); b08.ana_band_init(1815);  b09.ana_band_init(3130);
+  b10.ana_band_init(5400); b11.ana_band_init(9300);  b12.ana_band_init(16000);
+
+  // A second bank on the input, same centres. The reactive EQ is the whole
+  // reason: it moves four bands from a density reading, and a single curve
+  // cannot show you a move -- you need what the signal looked like before it.
+  // Tapped at the very top of @sample, ahead of even the input trim, so
+  // "original" means what arrived rather than what survived some of the chain.
+  i01.ana_band_init(40);   i02.ana_band_init(70);    i03.ana_band_init(120);
+  i04.ana_band_init(205);  i05.ana_band_init(355);   i06.ana_band_init(610);
+  i07.ana_band_init(1050); i08.ana_band_init(1815);  i09.ana_band_init(3130);
+  i10.ana_band_init(5400); i11.ana_band_init(9300);  i12.ana_band_init(16000);
+
+  // Centres are published too, so the manager labels its axis from the plugin
+  // instead of keeping its own copy of this list in sync by hand.
+  gmem[G_MEGA_BUS + 20] = 12;
+  gmem[G_MEGA_BUS + 41] = b01.fc; gmem[G_MEGA_BUS + 42] = b02.fc;
+  gmem[G_MEGA_BUS + 43] = b03.fc; gmem[G_MEGA_BUS + 44] = b04.fc;
+  gmem[G_MEGA_BUS + 45] = b05.fc; gmem[G_MEGA_BUS + 46] = b06.fc;
+  gmem[G_MEGA_BUS + 47] = b07.fc; gmem[G_MEGA_BUS + 48] = b08.fc;
+  gmem[G_MEGA_BUS + 49] = b09.fc; gmem[G_MEGA_BUS + 50] = b10.fc;
+  gmem[G_MEGA_BUS + 51] = b11.fc; gmem[G_MEGA_BUS + 52] = b12.fc;
+
+
+@slider
+  mega_params();
+
+// ============================================================
+// @BLOCK — Broadcast, heartbeat, stale-check, follow, steal
+// ============================================================
+@block
+// ---- Recalculate from sliders (GFX changes don't trigger @slider) ----
+mega_params();
+
+// ---- Reactive EQ coefficient update (4-band + intensity) ----
+eq_profile > 0 ? (
+  // Smooth density inputs to avoid jitter
+  req_sm = 0.85;
+  req_lo_smooth  = req_lo_smooth  * req_sm + min(1.0, max(0.0, (eq_hd.density - 1.0) / 1.5)) * (1 - req_sm);
+  req_mid_smooth = req_mid_smooth * req_sm + min(1.0, max(0.0, eq_hd.mid_density)) * (1 - req_sm);
+  req_hi_smooth  = req_hi_smooth  * req_sm + min(1.0, max(0.0, eq_hd.hi_density)) * (1 - req_sm);
+  req_air_smooth = req_air_smooth * req_sm + min(1.0, max(0.0, eq_hd.air_density)) * (1 - req_sm);
+
+  // Per-profile gain calculation (raw, before intensity)
+  eq_profile == 1 ? (  // CLEAN — subtle, transparency-focused
+    req_lo_db  = -req_lo_smooth * 1.5;
+    req_mid_db = -req_mid_smooth * 1.5;
+    req_hi_db  = -req_hi_smooth * 1.0;
+    req_air_db = (1.0 - req_air_smooth) * 1.5;
+  ) : eq_profile == 2 ? (  // LOUD — aggressive for max loudness
+    req_lo_db  = -req_lo_smooth * 3.0;
+    req_mid_db = -req_mid_smooth * 2.5;
+    req_hi_db  = -req_hi_smooth * 2.0;
+    req_air_db = (1.0 - req_air_smooth) * 2.0;
+  ) : eq_profile == 3 ? (  // OPEN — scooped + airy
+    req_lo_db  = -req_lo_smooth * 1.5;
+    req_mid_db = -req_mid_smooth * 3.0 - 0.5;
+    req_hi_db  = -req_hi_smooth * 1.5;
+    req_air_db = (1.0 - req_air_smooth) * 3.0 + 0.5;
+  ) : eq_profile == 4 ? (  // POP — polished, vocal clarity, shimmer
+    req_lo_db  = -req_lo_smooth * 2.0;
+    req_mid_db = -req_mid_smooth * 2.0;
+    req_hi_db  = -req_hi_smooth * 0.8;
+    req_air_db = (1.0 - req_air_smooth) * 2.5 + 0.3;
+  ) : eq_profile == 5 ? (  // HARDCORE — tight lows, aggressive mids, dark top
+    req_lo_db  = -req_lo_smooth * 3.5;
+    req_mid_db = -req_mid_smooth * 1.5 + 0.3;
+    req_hi_db  = -req_hi_smooth * 1.0 + 0.5;
+    req_air_db = (1.0 - req_air_smooth) * 1.0;
+  ) : eq_profile == 6 ? (  // HIP-HOP — heavy bass, scooped presence, crisp hats
+    req_lo_db  = -req_lo_smooth * 1.0;
+    req_mid_db = -req_mid_smooth * 2.5;
+    req_hi_db  = -req_hi_smooth * 2.0 - 0.3;
+    req_air_db = (1.0 - req_air_smooth) * 2.0 + 0.2;
+  ) : eq_profile == 7 ? (  // PUNK — raw bark, forward presence, gritty
+    req_lo_db  = -req_lo_smooth * 2.0;
+    req_mid_db = -req_mid_smooth * 1.0 + 0.5;
+    req_hi_db  = -req_hi_smooth * 0.5 + 0.5;
+    req_air_db = (1.0 - req_air_smooth) * 1.5;
+  );
+
+  // Apply intensity scaling (0% = off, 100% = normal, 200% = double)
+  req_lo_db  *= eq_intensity;
+  req_mid_db *= eq_intensity;
+  req_hi_db  *= eq_intensity;
+  req_air_db *= eq_intensity;
+
+  // Update biquad coefficients
+  abs(req_lo_db) > 0.05 ? (
+    req_lo.lms_bq_set_loshelf(120, req_lo_db, 0.707);
+  ) : (
+    req_lo.lms_bq_set_loshelf(120, 0, 0.707);
+  );
+  abs(req_mid_db) > 0.05 ? (
+    req_mid.lms_bq_set_peak(3000, req_mid_db * 2, 1.2);
+  ) : (
+    req_mid.lms_bq_set_peak(3000, 0, 1.2);
+  );
+  abs(req_hi_db) > 0.05 ? (
+    req_hi.lms_bq_set_peak(5000, req_hi_db * 2, 1.0);
+  ) : (
+    req_hi.lms_bq_set_peak(5000, 0, 1.0);
+  );
+  abs(req_air_db) > 0.05 ? (
+    req_air.lms_bq_set_hishelf(10000, req_air_db, 0.707);
+  ) : (
+    req_air.lms_bq_set_hishelf(10000, 0, 0.707);
+  );
+) : (
+  // Off: passthrough
+  req_lo_db = 0; req_mid_db = 0; req_hi_db = 0; req_air_db = 0;
+  req_lo.lms_bq_set_loshelf(120, 0, 0.707);
+  req_mid.lms_bq_set_peak(3000, 0, 1.2);
+  req_hi.lms_bq_set_peak(5000, 0, 1.0);
+  req_air.lms_bq_set_hishelf(10000, 0, 0.707);
+);
+
+// ---- Program-dependent release ----
+// Dense material = faster release (less pumping), transient = slower (preserve dynamics)
+opto_on ? (
+  density_rel_factor = max(0.3, min(1.0, 2.0 - eq_hd.density));
+  adapted_release = slider4 * density_rel_factor;
+  adapted_release = max(1, min(500, adapted_release));
+  lim.lms_lim_set(slider2, adapted_release);
+) : (
+  adapted_release = slider4;
+);
+
+// ============================================================
+//  PUBLISH — output analyser results onto the gmem bus
+// ============================================================
+// Once per block, not per sample. The old code wrote its three meter values
+// every single sample, into gmem[50030..50032]: three addresses squatting in
+// the middle of otherwise unclaimed space, documented nowhere, adjacent to
+// nothing. Nothing collided with them, but nothing stopped anything from
+// doing so either. This bus is a declared region with room for the rest.
+
+// Integrated loudness, BS.1770 two-pass gate. Pass 1 takes the mean of every
+// block above the -70 LUFS absolute gate; pass 2 re-takes it over only the
+// blocks within 10 LU of that mean. Cheap enough per block: 700 bins at the
+// block rate is nothing, and it keeps @sample lean.
+mega_reset = gmem[G_MEGA_BUS + 63];
+mega_reset > 0 ? (
+  memset(LUFS_HIST, 0, LUFS_HIST_N);
+  lufs_i = -70;
+  gmem[G_MEGA_BUS + 63] = 0;
+);
+
+pub_sum = 0; pub_n = 0; pub_i = 0;
+loop(LUFS_HIST_N,
+  pub_c = LUFS_HIST[pub_i];
+  pub_c > 0 ? (
+    pub_lv = -70 + (pub_i + 0.5) * 0.1;
+    pub_sum += pub_c * pow(10, (pub_lv + 0.691) / 10);
+    pub_n += pub_c;
+  );
+  pub_i += 1;
+);
+pub_n > 0 ? (
+  pub_ungated = -0.691 + 10 * log10(pub_sum / pub_n);
+  pub_rel = pub_ungated - 10;
+  pub_sum = 0; pub_n = 0; pub_i = 0;
+  loop(LUFS_HIST_N,
+    pub_c = LUFS_HIST[pub_i];
+    pub_c > 0 ? (
+      pub_lv = -70 + (pub_i + 0.5) * 0.1;
+      pub_lv > pub_rel ? (
+        pub_sum += pub_c * pow(10, (pub_lv + 0.691) / 10);
+        pub_n += pub_c;
+      );
+    );
+    pub_i += 1;
+  );
+  lufs_i = pub_n > 0 ? (-0.691 + 10 * log10(pub_sum / pub_n)) : pub_ungated;
+) : (
+  lufs_i = -70;
+);
+
+mega_hb += 1;
+gmem[G_MEGA_BUS + 0]  = mega_hb;
+gmem[G_MEGA_BUS + 1]  = lim.gr;         // gain reduction, linear
+gmem[G_MEGA_BUS + 2]  = lim.gr_meter;   // gain reduction, dB
+gmem[G_MEGA_BUS + 3]  = lim.true_peak;  // what the limiter is responding to
+gmem[G_MEGA_BUS + 4]  = lufs_m;
+gmem[G_MEGA_BUS + 5]  = lufs_s;
+gmem[G_MEGA_BUS + 6]  = lufs_i;
+gmem[G_MEGA_BUS + 7]  = out_peak;       // output peak, linear, slow fall
+gmem[G_MEGA_BUS + 8]  = slider2;        // ceiling dBFS, so the meter can mark it
+gmem[G_MEGA_BUS + 9]  = slider3;        // target loudness
+gmem[G_MEGA_BUS + 10] = out_hd.density;
+gmem[G_MEGA_BUS + 11] = out_hd.mid_density;
+gmem[G_MEGA_BUS + 12] = out_hd.hi_density;
+gmem[G_MEGA_BUS + 13] = out_hd.air_density;
+
+// Raw band envelopes as well as the ratios above. The amps' density matrix
+// animates from these, not from the ratios, so publishing them lets the
+// manager draw the same display from the same numbers.
+gmem[G_MEGA_BUS + 100] = out_hd.env_lo;
+gmem[G_MEGA_BUS + 101] = out_hd.env_mid;
+gmem[G_MEGA_BUS + 102] = out_hd.env_hi;
+gmem[G_MEGA_BUS + 103] = out_hd.env_air;
+
+gmem[G_MEGA_BUS + 21] = lms_lin2db(b01.env); gmem[G_MEGA_BUS + 22] = lms_lin2db(b02.env);
+gmem[G_MEGA_BUS + 23] = lms_lin2db(b03.env); gmem[G_MEGA_BUS + 24] = lms_lin2db(b04.env);
+gmem[G_MEGA_BUS + 25] = lms_lin2db(b05.env); gmem[G_MEGA_BUS + 26] = lms_lin2db(b06.env);
+gmem[G_MEGA_BUS + 27] = lms_lin2db(b07.env); gmem[G_MEGA_BUS + 28] = lms_lin2db(b08.env);
+gmem[G_MEGA_BUS + 29] = lms_lin2db(b09.env); gmem[G_MEGA_BUS + 30] = lms_lin2db(b10.env);
+gmem[G_MEGA_BUS + 31] = lms_lin2db(b11.env); gmem[G_MEGA_BUS + 32] = lms_lin2db(b12.env);
+
+// Input spectrum, same 12 centres, for the before/after overlay.
+gmem[G_MEGA_BUS + 81] = lms_lin2db(i01.env); gmem[G_MEGA_BUS + 82] = lms_lin2db(i02.env);
+gmem[G_MEGA_BUS + 83] = lms_lin2db(i03.env); gmem[G_MEGA_BUS + 84] = lms_lin2db(i04.env);
+gmem[G_MEGA_BUS + 85] = lms_lin2db(i05.env); gmem[G_MEGA_BUS + 86] = lms_lin2db(i06.env);
+gmem[G_MEGA_BUS + 87] = lms_lin2db(i07.env); gmem[G_MEGA_BUS + 88] = lms_lin2db(i08.env);
+gmem[G_MEGA_BUS + 89] = lms_lin2db(i09.env); gmem[G_MEGA_BUS + 90] = lms_lin2db(i10.env);
+gmem[G_MEGA_BUS + 91] = lms_lin2db(i11.env); gmem[G_MEGA_BUS + 92] = lms_lin2db(i12.env);
+
+// Reactive EQ state. It runs whenever a profile is chosen.
+gmem[G_MEGA_BUS + 14] = eq_profile > 0 ? 1 : 0;
+gmem[G_MEGA_BUS + 15] = eq_profile;
+gmem[G_MEGA_BUS + 16] = req_lo_db;
+gmem[G_MEGA_BUS + 17] = req_mid_db;
+gmem[G_MEGA_BUS + 18] = req_hi_db;
+gmem[G_MEGA_BUS + 19] = req_air_db;
+
+
+@sample
+
+  // Analyser tap 1 of 2: the untouched input, before even the trim. Paired
+  // with the output bank at the bottom of this block, this is what lets the
+  // manager draw the reactive EQ's move instead of just its result.
+  ana_in_mono = (spl0 + spl1) * 0.5;
+  i01.ana_band_proc(ana_in_mono); i02.ana_band_proc(ana_in_mono); i03.ana_band_proc(ana_in_mono);
+  i04.ana_band_proc(ana_in_mono); i05.ana_band_proc(ana_in_mono); i06.ana_band_proc(ana_in_mono);
+  i07.ana_band_proc(ana_in_mono); i08.ana_band_proc(ana_in_mono); i09.ana_band_proc(ana_in_mono);
+  i10.ana_band_proc(ana_in_mono); i11.ana_band_proc(ana_in_mono); i12.ana_band_proc(ana_in_mono);
+
+  // Input gain — clean trim into the opto, doesn't affect limiter drive
+  l = spl0 * in_gain;
+  r = spl1 * in_gain;
+
+  // ---- Comp stages: FET -> OPTO -> VCA ----
+  // With the lo crossover set, the stages only see the band above it and the
+  // lows rejoin untouched afterwards.
+  (fet_on || opto_on || vca_on) ? (
+    xover_freq > 0 ? (
+      xover.lms_xover_proc(l, r);
+      cl = xover.hi_l; cr = xover.hi_r;
+    ) : (
+      cl = l; cr = r;
+    );
+
+    fet_on ? (
+      dl = cl; dr = cr;
+      fet_drive == 1 ? (
+        cl = fet_sat_l.lms_sat_tape(cl, 0.65, 0.0);
+        cr = fet_sat_r.lms_sat_tape(cr, 0.65, 0.0);
+      ) : fet_drive == 2 ? (
+        cl = fet_sat_l.lms_sat_hot(cl, 0.7, 0.0);
+        cr = fet_sat_r.lms_sat_hot(cr, 0.7, 0.0);
+      );
+      fet.lms_comp_proc(cl, cr);
+      cl *= fet.gr * fet_out;
+      cr *= fet.gr * fet_out;
+      cl = dl + fet_mix * (cl - dl);
+      cr = dr + fet_mix * (cr - dr);
+      m_fet_gr = -fet.gr_db;
+    ) : m_fet_gr = 0;
+
+    opto_on ? (
+      dl = cl; dr = cr;
+      opto_mode == 2 ? (
+        opto_lite.lms_opto_lite_proc(cl, cr);
+        opto_g = opto_lite.gr;
+        m_opto_gr = opto_lite.gr_db;
+      ) : (
+        opto_warmth > 0.01 ? (
+          cl = opto.sat_l.lms_sat_warm(cl, opto_warmth * 0.15, 0.0);
+          cr = opto.sat_r.lms_sat_warm(cr, opto_warmth * 0.15, 0.0);
+        );
+        opto.lms_opto_proc(cl, cr);
+        opto_g = opto.gr;
+        m_opto_gr = opto.gr_db;
+      );
+      cl *= opto_g * opto_gain;
+      cr *= opto_g * opto_gain;
+      cl = dl + opto_blend * (cl - dl);
+      cr = dr + opto_blend * (cr - dr);
+    ) : m_opto_gr = 0;
+
+    vca_on ? (
+      dl = cl; dr = cr;
+      vca_sc_hz > 0 ? (
+        vca.lms_comp_proc_ar(vca_sc.lms_bq_proc_l(cl), vca_sc.lms_bq_proc_r(cr), vca_auto);
+      ) : (
+        vca.lms_comp_proc_ar(cl, cr, vca_auto);
+      );
+      cl *= vca.gr * vca_makeup;
+      cr *= vca.gr * vca_makeup;
+      cl = dl + vca_mix * (cl - dl);
+      cr = dr + vca_mix * (cr - dr);
+      m_vca_gr = -vca.gr_db;
+    ) : m_vca_gr = 0;
+
+    xover_freq > 0 ? (
+      l = xover.lo_l + cl;
+      r = xover.lo_r + cr;
+    ) : (
+      l = cl; r = cr;
+    );
+  ) : (
+    m_fet_gr = 0; m_opto_gr = 0; m_vca_gr = 0;
+  );
+
+  // Reactive EQ: density-driven spectral shaping before brick-wall
+  // Compensates for the spectral distortion heavy limiting causes:
+  // bass mud, mid harshness, lost air
+  (eq_profile > 0 || opto_on) ? eq_hd.lms_hd_proc((l + r) * 0.5);
+  eq_profile > 0 ? (
+    l = req_lo.lms_bq_proc_l(l);   r = req_lo.lms_bq_proc_r(r);
+    l = req_mid.lms_bq_proc_l(l);  r = req_mid.lms_bq_proc_r(r);
+    l = req_hi.lms_bq_proc_l(l);   r = req_hi.lms_bq_proc_r(r);
+    l = req_air.lms_bq_proc_l(l);  r = req_air.lms_bq_proc_r(r);
+  );
+
+  // Target loudness boost — drives into the brick-wall
+  l *= target_boost;
+  r *= target_boost;
+
+  // Brick-wall limiter (core function — lookahead + hard clip)
+  lim.lms_lim_proc(l, r);
+
+  // Output from limiter (already gain-reduced and hard-clipped at ceiling)
+  spl0 = lim.out_l;
+  spl1 = lim.out_r;
+
+  // Metering
+  slider5 = lim.gr_meter;
+  m_lim_gr = lim.gr_meter;
+
+  // ---- Output analysis (see @init) ----
+  // Everything here reads spl0/spl1 and writes nothing back to them.
+  ana_mono = (spl0 + spl1) * 0.5;
+
+  out_hd.lms_hd_proc(ana_mono);
+
+  b01.ana_band_proc(ana_mono); b02.ana_band_proc(ana_mono); b03.ana_band_proc(ana_mono);
+  b04.ana_band_proc(ana_mono); b05.ana_band_proc(ana_mono); b06.ana_band_proc(ana_mono);
+  b07.ana_band_proc(ana_mono); b08.ana_band_proc(ana_mono); b09.ana_band_proc(ana_mono);
+  b10.ana_band_proc(ana_mono); b11.ana_band_proc(ana_mono); b12.ana_band_proc(ana_mono);
+
+  ana_pk = max(abs(spl0), abs(spl1));
+  ana_pk > out_peak ? (out_peak = ana_pk) : (out_peak *= peak_decay);
+
+  // K-weighted mean square, summed over channels. Stereo L and R both carry
+  // weight 1.0 in BS.1770, so a plain sum is the channel-weighted sum.
+  ana_kl = kw_hp.lms_bq_proc_l(kw_shelf.lms_bq_proc_l(spl0));
+  ana_kr = kw_hp.lms_bq_proc_r(kw_shelf.lms_bq_proc_r(spl1));
+  lufs_sub_sum += ana_kl * ana_kl + ana_kr * ana_kr;
+  lufs_sub_pos += 1;
+
+  lufs_sub_pos >= lufs_sub_len ? (
+    LUFS_RING[lufs_ring_pos] = lufs_sub_sum / lufs_sub_len;
+    lufs_ring_pos = (lufs_ring_pos + 1) % LUFS_RING_N;
+    lufs_ring_fill < LUFS_RING_N ? lufs_ring_fill += 1;
+    lufs_sub_sum = 0; lufs_sub_pos = 0;
+
+    // Momentary — 400 ms
+    lufs_ring_fill >= 4 ? (
+      ana_ms = 0; ana_i = 0;
+      loop(4,
+        ana_ms += LUFS_RING[(lufs_ring_pos - 1 - ana_i + LUFS_RING_N * 2) % LUFS_RING_N];
+        ana_i += 1;
+      );
+      ana_ms *= 0.25;
+      lufs_m = ana_ms > 0 ? (-0.691 + 10 * log10(ana_ms)) : -70;
+
+      // Absolute gate at -70 LUFS, then bin it for the integrated pass.
+      lufs_m > -70 ? (
+        ana_i = floor((lufs_m + 70) * 10);
+        ana_i = max(0, min(LUFS_HIST_N - 1, ana_i));
+        LUFS_HIST[ana_i] += 1;
+      );
+    );
+
+    // Short-term — 3 s
+    lufs_ring_fill >= LUFS_RING_N ? (
+      ana_ms = 0; ana_i = 0;
+      loop(LUFS_RING_N, ana_ms += LUFS_RING[ana_i]; ana_i += 1);
+      ana_ms /= LUFS_RING_N;
+      lufs_s = ana_ms > 0 ? (-0.691 + 10 * log10(ana_ms)) : -70;
+    );
+  );
+
+// ============================================================
+// @GFX
+// ============================================================
+@gfx 560 620
+
+// ============================================================================
+//  SCALING
+// ============================================================================
+gfx_ext_retina > 0 ? gfx_ext_retina = 1;
+!(mouse_cap & 1) ? (cap_bx = -1; cap_by = -1);
+S = gfx_w / 560;
+S < 0.5 ? S = 0.5;
+
+F_TITLE = max(10, floor(22 * S));
+F_LABEL = max(8, floor(12 * S));
+F_SMALL = max(7, floor(11 * S));
+F_TINY  = max(7, floor(10 * S));
+
+// ============================================================================
+//  COLOR CONSTANTS
+// ============================================================================
+COL_BG_R = 0.04; COL_BG_G = 0.04; COL_BG_B = 0.06;
+COL_PANEL_R = 0.08; COL_PANEL_G = 0.08; COL_PANEL_B = 0.11;
+COL_PANEL_HI_R = 0.12; COL_PANEL_HI_G = 0.12; COL_PANEL_HI_B = 0.16;
+COL_BORDER_R = 0.20; COL_BORDER_G = 0.20; COL_BORDER_B = 0.25;
+COL_TITLE_R = 0.95; COL_TITLE_G = 0.78; COL_TITLE_B = 0.35;
+COL_SEC_R = 0.55; COL_SEC_G = 0.50; COL_SEC_B = 0.40;
+COL_TEXT_R = 0.78; COL_TEXT_G = 0.78; COL_TEXT_B = 0.82;
+COL_DIM_R = 0.38; COL_DIM_G = 0.38; COL_DIM_B = 0.42;
+COL_ACCENT_R = 0.95; COL_ACCENT_G = 0.45; COL_ACCENT_B = 0.15;
+COL_GREEN_R = 0.25; COL_GREEN_G = 0.80; COL_GREEN_B = 0.50;
+COL_CYAN_R = 0.20; COL_CYAN_G = 0.60; COL_CYAN_B = 0.85;
+COL_BAR_BG_R = 0.12; COL_BAR_BG_G = 0.12; COL_BAR_BG_B = 0.16;
+
+// ============================================================================
+//  BACKGROUND
+// ============================================================================
+hdr_h = floor(44 * S);
+gfx_r = COL_BG_R; gfx_g = COL_BG_G; gfx_b = COL_BG_B;
+gfx_rect(0, 0, gfx_w, gfx_h);
+gfx_r = 0.03; gfx_g = 0.03; gfx_b = 0.05;
+gfx_rect(0, 0, gfx_w, hdr_h);
+gfx_r = COL_TITLE_R * 0.6; gfx_g = COL_TITLE_G * 0.6; gfx_b = COL_TITLE_B * 0.6;
+gfx_rect(0, hdr_h, gfx_w, max(1, floor(2 * S)));
+
+// ============================================================================
+//  HELPERS
+// ============================================================================
+function draw_bar(bx, by, bw, bh, val, vmin, vmax, label, show_val) (
+  gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+  gfx_rect(bx, by, bw, bh);
+  norm = (val - vmin) / (vmax - vmin);
+  norm = max(0, min(1, norm));
+  fill_w = norm * bw;
+  fill_w > 0 ? (
+    gfx_r = COL_CYAN_R * 0.6; gfx_g = COL_CYAN_G * 0.6; gfx_b = COL_CYAN_B * 0.6;
+    gfx_rect(bx, by, fill_w, bh);
+    gfx_r = COL_CYAN_R * 0.8; gfx_g = COL_CYAN_G * 0.8; gfx_b = COL_CYAN_B * 0.8;
+    gfx_rect(bx, by, fill_w, floor(bh / 2));
+    gfx_r = COL_CYAN_R; gfx_g = COL_CYAN_G; gfx_b = COL_CYAN_B;
+    gfx_rect(bx, by, fill_w, 1);
+  );
+  gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+  gfx_rect(bx, by, bw, 1); gfx_rect(bx, by + bh - 1, bw, 1);
+  gfx_rect(bx, by, 1, bh); gfx_rect(bx + bw - 1, by, 1, bh);
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_setfont(1, "Arial", F_LABEL);
+  gfx_x = bx + floor(5 * S); gfx_y = by + floor((bh - F_LABEL) / 2);
+  gfx_drawstr(label);
+  show_val ? (
+    gfx_setfont(1, "Arial", F_SMALL);
+    gfx_x = bx + bw - floor(40 * S); gfx_y = by + floor((bh - F_SMALL) / 2);
+    gfx_drawnumber(val, val == floor(val) ? 0 : 1);
+  );
+  (mouse_cap & 1) && !(last_cap & 1) &&
+    mouse_x >= bx && mouse_x <= bx + bw &&
+    mouse_y >= by && mouse_y <= by + bh ? (
+      cap_bx = bx; cap_by = by;
+  );
+  (mouse_cap & 1) && cap_bx == bx && cap_by == by ? (
+    new_norm = (mouse_x - bx) / bw;
+    new_norm = max(0, min(1, new_norm));
+    val = vmin + new_norm * (vmax - vmin);
+  );
+  val;
+);
+
+// ============================================================================
+//  LAYOUT
+// ============================================================================
+margin = floor(8 * S);
+gap = floor(6 * S);
+bar_h = floor(18 * S);
+bar_sp = floor(21 * S);
+pad = floor(4 * S);
+pad2 = pad * 2;
+body_y = floor(50 * S);
+
+// Two columns: controls left, metering right
+col_w = floor((gfx_w - margin * 2 - gap) / 2);
+c1x = margin;
+c2x = margin + col_w + gap;
+
+// ============================================================================
+//  LOGO + TITLE
+// ============================================================================
+gfx_getimgdim(0, logo_img_w, logo_img_h);
+logo_img_w > 0 ? (
+  logo_h = floor(32 * S);
+  logo_w = floor(logo_h * (logo_img_w / logo_img_h));
+  logo_x = floor(6 * S);
+  logo_y = floor(((hdr_h - logo_h)) / 2);
+  gfx_blit(0, 1, 0, 0, 0, logo_img_w, logo_img_h, logo_x, logo_y, logo_w, logo_h);
+) : (
+  logo_w = 0;
+  logo_x = 0;
+);
+gfx_r = COL_TITLE_R; gfx_g = COL_TITLE_G; gfx_b = COL_TITLE_B;
+gfx_setfont(1, "Arial", F_TITLE);
+gfx_x = logo_x + logo_w + floor(8 * S); gfx_y = floor(6 * S);
+gfx_drawstr("MEGA INCREASINATOR");
+gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+gfx_setfont(1, "Arial", F_SMALL);
+gfx_x = logo_x + logo_w + floor(8 * S); gfx_y = floor(26 * S);
+gfx_drawstr("FET / Opto / VCA into a Brick-Wall Limiter");
+
+// ============================================================================
+//  LEFT COLUMN: CONTROLS
+// ============================================================================
+ctrl_h = floor(197 * S);
+lms_draw_panel(c1x, body_y, col_w, ctrl_h, "CONTROLS");
+cy = body_y + floor(26 * S);
+
+// Input Gain
+_old = slider1; slider1 = draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider1, -12, 12, "Input dB", 1);
+slider1 != _old ? slider_automate(2^0);
+cy += bar_sp;
+
+// Target Loudness (the big knob — how loud do you want it)
+_old = slider3; slider3 = draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider3, 0, 24, "Target dB", 1);
+slider3 != _old ? slider_automate(2^2);
+cy += bar_sp;
+
+// Ceiling
+_old = slider2; slider2 = draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider2, -3, 0, "Ceiling dBFS", 1);
+slider2 != _old ? slider_automate(2^1);
+cy += bar_sp;
+
+// Release
+_old = slider4; slider4 = draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider4, 1, 500, "Release ms", 1);
+slider4 != _old ? slider_automate(2^3);
+cy += bar_sp;
+
+// EQ Profile selector (click to cycle)
+eq_sel_w = col_w - pad2;
+eq_sel_h = bar_h;
+gfx_r = COL_BAR_BG_R; gfx_g = COL_BAR_BG_G; gfx_b = COL_BAR_BG_B;
+gfx_rect(c1x + pad, cy, eq_sel_w, eq_sel_h);
+gfx_r = COL_BORDER_R; gfx_g = COL_BORDER_G; gfx_b = COL_BORDER_B;
+gfx_rect(c1x + pad, cy, eq_sel_w, 1); gfx_rect(c1x + pad, cy + eq_sel_h - 1, eq_sel_w, 1);
+gfx_rect(c1x + pad, cy, 1, eq_sel_h); gfx_rect(c1x + pad + eq_sel_w - 1, cy, 1, eq_sel_h);
+// Highlight bar when active
+eq_profile > 0 ? (
+  gfx_r = COL_ACCENT_R * 0.25; gfx_g = COL_ACCENT_G * 0.25; gfx_b = COL_ACCENT_B * 0.15;
+  gfx_rect(c1x + pad + 1, cy + 1, eq_sel_w - 2, eq_sel_h - 2);
+);
+gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+gfx_setfont(1, "Arial", F_LABEL);
+gfx_x = c1x + pad + floor(5 * S); gfx_y = cy + floor((eq_sel_h - F_LABEL) / 2);
+gfx_drawstr("EQ Profile");
+// Show current mode
+gfx_setfont(1, "Arial", F_SMALL);
+eq_profile > 0 ? (
+  gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+) : (
+  gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+);
+gfx_x = c1x + pad + eq_sel_w - floor(70 * S); gfx_y = cy + floor((eq_sel_h - F_SMALL) / 2);
+slider7 == 0 ? gfx_drawstr("OFF");
+slider7 == 1 ? gfx_drawstr("CLEAN");
+slider7 == 2 ? gfx_drawstr("LOUD");
+slider7 == 3 ? gfx_drawstr("OPEN");
+slider7 == 4 ? gfx_drawstr("POP");
+slider7 == 5 ? gfx_drawstr("HARDCORE");
+slider7 == 6 ? gfx_drawstr("HIP-HOP");
+slider7 == 7 ? gfx_drawstr("PUNK");
+// Left-click cycles forward, right-click cycles backward
+(mouse_cap & 1) && !(last_cap & 1) &&
+  mouse_x >= c1x + pad && mouse_x <= c1x + pad + eq_sel_w &&
+  mouse_y >= cy && mouse_y <= cy + eq_sel_h ? (
+  _old = slider7;
+  slider7 = (slider7 + 1) % 8;
+  slider7 != _old ? slider_automate(2^6);
+);
+(mouse_cap & 2) && !(last_cap & 2) &&
+  mouse_x >= c1x + pad && mouse_x <= c1x + pad + eq_sel_w &&
+  mouse_y >= cy && mouse_y <= cy + eq_sel_h ? (
+  _old = slider7;
+  slider7 = slider7 - 1; slider7 < 0 ? slider7 = 7;
+  slider7 != _old ? slider_automate(2^6);
+);
+cy += bar_sp;
+
+// EQ Intensity
+_old = slider8; slider8 = draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider8, 0, 200, "EQ Intens %", 1);
+slider8 != _old ? slider_automate(2^7);
+cy += bar_sp;
+
+// Lo Crossover
+_old = slider9; slider9 = draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider9, 0, 300, "Lo Xover Hz", 1);
+slider9 != _old ? slider_automate(2^8);
+
+// ============================================================================
+//  RIGHT COLUMN: METERING
+// ============================================================================
+
+// --- GR METER ---
+comps_on = fet_on || opto_on || vca_on;
+gr_panel_h = comps_on ? floor(72 * S) : floor(60 * S);
+lms_draw_panel(c2x, body_y, col_w, gr_panel_h, "GAIN REDUCTION");
+
+meter_x = c2x + pad;
+meter_y = body_y + floor(26 * S);
+meter_w = col_w - pad2;
+meter_h = floor(28 * S);
+
+// Background
+gfx_r = 0.08; gfx_g = 0.08; gfx_b = 0.10;
+gfx_rect(meter_x, meter_y, meter_w, meter_h);
+
+// GR bar (right to left)
+gr_pct = min(1.0, abs(lim.gr_meter) / 24.0);
+bar_w_gr = gr_pct * meter_w;
+
+lim.gr_meter > -3 ? (
+  gfx_r = 0.2; gfx_g = 0.8; gfx_b = 0.3; gfx_a = 0.8;
+) : lim.gr_meter > -6 ? (
+  gfx_r = 0.9; gfx_g = 0.7; gfx_b = 0.1; gfx_a = 0.8;
+) : (
+  gfx_r = 0.9; gfx_g = 0.2; gfx_b = 0.2; gfx_a = 0.8;
+);
+gfx_rect(meter_x + meter_w - bar_w_gr, meter_y, bar_w_gr, meter_h);
+gfx_a = 1;
+
+// GR text
+gfx_r = 1; gfx_g = 1; gfx_b = 1;
+gfx_setfont(1, "Arial", F_LABEL);
+gfx_x = meter_x + meter_w / 2 - floor(25 * S);
+gfx_y = meter_y + floor(8 * S);
+gfx_drawstr("GR: ");
+gfx_drawnumber(lim.gr_meter, 1);
+gfx_drawstr(" dB");
+
+// Border
+gfx_r = 0.25; gfx_g = 0.25; gfx_b = 0.3;
+gfx_rect(meter_x, meter_y, meter_w, meter_h, 0);
+
+// Per-stage GR (only when a comp stage is in)
+comps_on ? (
+  gfx_setfont(1, "Arial", F_TINY);
+  gfx_x = meter_x; gfx_y = meter_y + meter_h + floor(2 * S);
+  gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+  fet_on ? (gfx_drawstr("FET "); gfx_drawnumber(m_fet_gr, 1); gfx_drawstr("  "));
+  opto_on ? (gfx_drawstr("Opto "); gfx_drawnumber(m_opto_gr, 1); gfx_drawstr("  "));
+  vca_on ? (gfx_drawstr("VCA "); gfx_drawnumber(m_vca_gr, 1); gfx_drawstr("  "));
+  gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+  gfx_drawstr("Wall ");
+  gfx_drawnumber(lim.gr_meter, 1);
+);
+
+// --- LEVELS INFO ---
+levels_y = body_y + gr_panel_h + gap;
+levels_h = floor(56 * S);
+lms_draw_panel(c2x, levels_y, col_w, levels_h, "LEVELS");
+
+py = levels_y + floor(26 * S);
+gfx_setfont(1, "Arial", F_SMALL);
+
+// Target loudness indicator
+gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+gfx_x = c2x + pad + floor(4 * S); gfx_y = py;
+gfx_drawstr("Boost: +");
+gfx_drawnumber(slider3, 1);
+gfx_drawstr(" dB");
+
+// True peak display
+gfx_r = 0.3; gfx_g = 0.7; gfx_b = 0.9;
+gfx_x = c2x + col_w / 2; gfx_y = py;
+gfx_drawstr("Peak: ");
+tp_db = lim.true_peak > 0.00001 ? 20 * log10(lim.true_peak) : -100;
+gfx_drawnumber(tp_db, 1);
+
+py += floor(14 * S);
+// Ceiling display
+gfx_r = 1; gfx_g = 0.4; gfx_b = 0.4;
+gfx_x = c2x + pad + floor(4 * S); gfx_y = py;
+gfx_drawstr("Ceiling: ");
+gfx_drawnumber(slider2, 1);
+gfx_drawstr(" dBFS");
+
+// --- DENSITY STATE ---
+density_y = levels_y + levels_h + gap;
+density_h = floor(72 * S);
+
+// Density source: the reactive EQ's tracker (runs with a profile or the opto in)
+(eq_profile > 0 || opto_on) ? (
+  // density is 1.0-2.5 overall; normalize to 0-1 for the bar
+  disp_lo = min(1, (eq_hd.density - 1.0) / 1.5);
+  disp_mid = eq_hd.mid_density;
+  disp_hi = eq_hd.hi_density;
+  disp_air = eq_hd.air_density;
+  lms_draw_panel(c2x, density_y, col_w, density_h, "DENSITY");
+) : (
+  disp_lo = 0; disp_mid = 0; disp_hi = 0; disp_air = 0;
+  lms_draw_panel(c2x, density_y, col_w, density_h, "DENSITY STATE");
+);
+
+dy = density_y + floor(26 * S);
+d_bar_w = floor(60 * S);
+d_bar_h = floor(10 * S);
+d_bx = c2x + pad + floor(30 * S);
+
+// Lo
+gfx_r = 0.12; gfx_g = 0.31; gfx_b = 0.86;
+gfx_rect(d_bx, dy, d_bar_w * min(1, disp_lo), d_bar_h);
+gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+gfx_rect(d_bx, dy, d_bar_w, d_bar_h, 0);
+gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+gfx_setfont(1, "Arial", F_TINY);
+gfx_x = c2x + pad; gfx_y = dy;
+gfx_drawstr("LO");
+
+dy += floor(11 * S);
+gfx_r = 0.86; gfx_g = 0.63; gfx_b = 0.12;
+gfx_rect(d_bx, dy, d_bar_w * min(1, disp_mid), d_bar_h);
+gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+gfx_rect(d_bx, dy, d_bar_w, d_bar_h, 0);
+gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+gfx_x = c2x + pad; gfx_y = dy;
+gfx_drawstr("MID");
+
+dy += floor(11 * S);
+gfx_r = 0.86; gfx_g = 0.24; gfx_b = 0.12;
+gfx_rect(d_bx, dy, d_bar_w * min(1, disp_hi), d_bar_h);
+gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+gfx_rect(d_bx, dy, d_bar_w, d_bar_h, 0);
+gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+gfx_x = c2x + pad; gfx_y = dy;
+gfx_drawstr("HI");
+
+dy += floor(11 * S);
+gfx_r = 0.71; gfx_g = 0.16; gfx_b = 0.86;
+gfx_rect(d_bx, dy, d_bar_w * min(1, disp_air), d_bar_h);
+gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+gfx_rect(d_bx, dy, d_bar_w, d_bar_h, 0);
+gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+gfx_x = c2x + pad; gfx_y = dy;
+gfx_drawstr("AIR");
+
+// Status text on right side of density panel
+gfx_setfont(1, "Arial", F_TINY);
+status_x = d_bx + d_bar_w + floor(15 * S);
+status_y = density_y + floor(26 * S);
+
+opto_on && opto_mode < 2 ? (
+  // Show opto photocell state
+  gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+  gfx_x = status_x; gfx_y = status_y;
+  gfx_drawstr("OPTO ACTIVE");
+  gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+  gfx_x = status_x; gfx_y = status_y + floor(12 * S);
+  gfx_drawstr("Cell: ");
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_drawnumber(opto.cell_r_display * 100, 0);
+  gfx_drawstr("%");
+  gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+  gfx_x = status_x; gfx_y = status_y + floor(24 * S);
+  gfx_drawstr("Mem: ");
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_drawnumber(opto.memory_display * 100, 0);
+  gfx_drawstr("%");
+) : (
+  gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+  gfx_x = status_x; gfx_y = status_y;
+  gfx_drawstr("STANDARD");
+);
+
+// --- REACTIVE EQ STATUS (only when active) ---
+eq_profile > 0 ? (
+  eq_status_y = density_y + density_h + gap;
+  eq_status_h = floor(63 * S);
+  lms_draw_panel(c2x, eq_status_y, col_w, eq_status_h, "REACTIVE EQ");
+
+  eqy = eq_status_y + floor(26 * S);
+  gfx_setfont(1, "Arial", F_TINY);
+  eq_bar_w = floor(50 * S);
+  eq_bx = c2x + pad + floor(30 * S);
+  eq_center = eq_bx + floor(eq_bar_w / 2);
+
+  // Lo shelf indicator (bidirectional from center)
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h);
+  gfx_r = 0.3; gfx_g = 0.3; gfx_b = 0.35;
+  gfx_rect(eq_center, eqy, 1, d_bar_h);
+  lo_fill = floor((req_lo_db / 6.0) * (eq_bar_w / 2));
+  lo_fill < 0 ? (
+    gfx_r = 0.12; gfx_g = 0.31; gfx_b = 0.86;
+    gfx_rect(eq_center + lo_fill, eqy, -lo_fill, d_bar_h);
+  ) : lo_fill > 0 ? (
+    gfx_r = 0.12; gfx_g = 0.31; gfx_b = 0.86;
+    gfx_rect(eq_center, eqy, lo_fill, d_bar_h);
+  );
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h, 0);
+  gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+  gfx_x = c2x + pad; gfx_y = eqy;
+  gfx_drawstr("LO");
+
+  eqy += floor(11 * S);
+  // Mid peak indicator
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h);
+  gfx_r = 0.3; gfx_g = 0.3; gfx_b = 0.35;
+  gfx_rect(eq_center, eqy, 1, d_bar_h);
+  mid_fill = floor((req_mid_db / 6.0) * (eq_bar_w / 2));
+  mid_fill < 0 ? (
+    gfx_r = 0.86; gfx_g = 0.63; gfx_b = 0.12;
+    gfx_rect(eq_center + mid_fill, eqy, -mid_fill, d_bar_h);
+  ) : mid_fill > 0 ? (
+    gfx_r = 0.86; gfx_g = 0.63; gfx_b = 0.12;
+    gfx_rect(eq_center, eqy, mid_fill, d_bar_h);
+  );
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h, 0);
+  gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+  gfx_x = c2x + pad; gfx_y = eqy;
+  gfx_drawstr("MID");
+
+  eqy += floor(11 * S);
+  // Hi presence indicator
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h);
+  gfx_r = 0.3; gfx_g = 0.3; gfx_b = 0.35;
+  gfx_rect(eq_center, eqy, 1, d_bar_h);
+  hi_fill = floor((req_hi_db / 6.0) * (eq_bar_w / 2));
+  hi_fill < 0 ? (
+    gfx_r = 0.86; gfx_g = 0.24; gfx_b = 0.12;
+    gfx_rect(eq_center + hi_fill, eqy, -hi_fill, d_bar_h);
+  ) : hi_fill > 0 ? (
+    gfx_r = 0.86; gfx_g = 0.24; gfx_b = 0.12;
+    gfx_rect(eq_center, eqy, hi_fill, d_bar_h);
+  );
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h, 0);
+  gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+  gfx_x = c2x + pad; gfx_y = eqy;
+  gfx_drawstr("HI");
+
+  eqy += floor(11 * S);
+  // Air shelf indicator
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h);
+  gfx_r = 0.3; gfx_g = 0.3; gfx_b = 0.35;
+  gfx_rect(eq_center, eqy, 1, d_bar_h);
+  air_fill = floor((req_air_db / 6.0) * (eq_bar_w / 2));
+  air_fill < 0 ? (
+    gfx_r = 0.71; gfx_g = 0.16; gfx_b = 0.86;
+    gfx_rect(eq_center + air_fill, eqy, -air_fill, d_bar_h);
+  ) : air_fill > 0 ? (
+    gfx_r = 0.71; gfx_g = 0.16; gfx_b = 0.86;
+    gfx_rect(eq_center, eqy, air_fill, d_bar_h);
+  );
+  gfx_r = 0.2; gfx_g = 0.2; gfx_b = 0.25;
+  gfx_rect(eq_bx, eqy, eq_bar_w, d_bar_h, 0);
+  gfx_r = 0.5; gfx_g = 0.5; gfx_b = 0.6;
+  gfx_x = c2x + pad; gfx_y = eqy;
+  gfx_drawstr("AIR");
+
+  // Profile name + intensity + adapted release
+  gfx_setfont(1, "Arial", F_TINY);
+  gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+  gfx_x = eq_bx + eq_bar_w + floor(8 * S); gfx_y = eq_status_y + floor(26 * S);
+  slider7 == 1 ? gfx_drawstr("CLEAN");
+  slider7 == 2 ? gfx_drawstr("LOUD");
+  slider7 == 3 ? gfx_drawstr("OPEN");
+  slider7 == 4 ? gfx_drawstr("POP");
+  slider7 == 5 ? gfx_drawstr("HARDCORE");
+  slider7 == 6 ? gfx_drawstr("HIP-HOP");
+  slider7 == 7 ? gfx_drawstr("PUNK");
+  gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+  gfx_drawstr(" ");
+  gfx_drawnumber(slider8, 0);
+  gfx_drawstr("%");
+
+  gfx_r = COL_DIM_R; gfx_g = COL_DIM_G; gfx_b = COL_DIM_B;
+  gfx_x = eq_bx + eq_bar_w + floor(8 * S); gfx_y = eq_status_y + floor(38 * S);
+  gfx_drawstr("Rel: ");
+  gfx_r = COL_TEXT_R; gfx_g = COL_TEXT_G; gfx_b = COL_TEXT_B;
+  gfx_drawnumber(adapted_release, 0);
+  gfx_drawstr("ms");
+);
+
+
+// ============================================================================
+//  COMP STAGES: FET -> OPTO -> VCA (signal order, left to right)
+// ============================================================================
+st_y = floor(350 * S);
+st_h = floor(236 * S);
+st_w = floor((gfx_w - margin * 2 - gap * 2) / 3);
+st_bw = st_w - pad2;
+
+function stage_meter(sx, sy, sw, gr_db) local(mw) (
+  gfx_r = 0.08; gfx_g = 0.08; gfx_b = 0.10;
+  gfx_rect(sx, sy, sw, floor(6 * S));
+  mw = min(1, -gr_db / 24) * sw;
+  gfx_r = COL_ACCENT_R; gfx_g = COL_ACCENT_G; gfx_b = COL_ACCENT_B;
+  mw > 0 ? gfx_rect(sx + sw - mw, sy, mw, floor(6 * S));
+);
+
+// FET
+sx = margin;
+lms_draw_panel(sx, st_y, st_w, st_h, "FET");
+cy = st_y + floor(24 * S);
+_old = slider10; slider10 = lms_draw_toggle(sx + pad, cy, slider10, "In");
+slider10 != _old ? slider_automate(2^9);
+stage_meter(sx + floor(60 * S), cy + floor(5 * S), st_w - floor(60 * S) - pad, m_fet_gr);
+cy += bar_sp;
+_old = slider11; slider11 = draw_bar(sx + pad, cy, st_bw, bar_h, slider11, -40, 0, "Thresh", 1);
+slider11 != _old ? slider_automate(2^10);
+cy += bar_sp;
+_old = slider12; slider12 = lms_draw_mode_sel5(sx + pad, cy, st_bw, bar_h, slider12, 4, "Ratio", "4:1", "8:1", "12:1", "20:1", "Nuke");
+slider12 != _old ? slider_automate(2^11);
+cy += bar_sp;
+_old = slider13; slider13 = draw_bar(sx + pad, cy, st_bw, bar_h, slider13, 0.05, 20, "Attack", 1);
+slider13 != _old ? slider_automate(2^12);
+cy += bar_sp;
+_old = slider14; slider14 = draw_bar(sx + pad, cy, st_bw, bar_h, slider14, 50, 2500, "Release", 1);
+slider14 != _old ? slider_automate(2^13);
+cy += bar_sp;
+_old = slider15; slider15 = draw_bar(sx + pad, cy, st_bw, bar_h, slider15, -12, 24, "Output", 1);
+slider15 != _old ? slider_automate(2^14);
+cy += bar_sp;
+_old = slider16; slider16 = lms_draw_mode_sel4(sx + pad, cy, st_bw, bar_h, slider16, 2, "Drive", "Clean", "Tape", "Tube", "");
+slider16 != _old ? slider_automate(2^15);
+cy += bar_sp;
+_old = slider17; slider17 = draw_bar(sx + pad, cy, st_bw, bar_h, slider17, 0, 100, "Mix %", 1);
+slider17 != _old ? slider_automate(2^16);
+
+// OPTO
+sx = margin + st_w + gap;
+lms_draw_panel(sx, st_y, st_w, st_h, "OPTO");
+cy = st_y + floor(24 * S);
+_old = slider18; slider18 = lms_draw_toggle(sx + pad, cy, slider18, "In");
+slider18 != _old ? slider_automate(2^17);
+stage_meter(sx + floor(60 * S), cy + floor(5 * S), st_w - floor(60 * S) - pad, m_opto_gr);
+cy += bar_sp;
+_old = slider19; slider19 = draw_bar(sx + pad, cy, st_bw, bar_h, slider19, 0, 100, "Peak Red", 1);
+slider19 != _old ? slider_automate(2^18);
+cy += bar_sp;
+_old = slider20; slider20 = draw_bar(sx + pad, cy, st_bw, bar_h, slider20, -12, 24, "Gain", 1);
+slider20 != _old ? slider_automate(2^19);
+cy += bar_sp;
+_old = slider21; slider21 = lms_draw_mode_sel4(sx + pad, cy, st_bw, bar_h, slider21, 2, "Mode", "Comp", "Limit", "Drum", "");
+slider21 != _old ? slider_automate(2^20);
+cy += bar_sp;
+_old = slider22; slider22 = draw_bar(sx + pad, cy, st_bw, bar_h, slider22, 0, 100, "Emphasis", 1);
+slider22 != _old ? slider_automate(2^21);
+cy += bar_sp;
+_old = slider23; slider23 = draw_bar(sx + pad, cy, st_bw, bar_h, slider23, 0, 100, "Warmth", 1);
+slider23 != _old ? slider_automate(2^22);
+cy += bar_sp;
+_old = slider6; slider6 = draw_bar(sx + pad, cy, st_bw, bar_h, slider6, 0, 100, "Mix %", 1);
+slider6 != _old ? slider_automate(2^5);
+
+// VCA
+sx = margin + (st_w + gap) * 2;
+lms_draw_panel(sx, st_y, st_w, st_h, "VCA");
+cy = st_y + floor(24 * S);
+_old = slider24; slider24 = lms_draw_toggle(sx + pad, cy, slider24, "In");
+slider24 != _old ? slider_automate(2^23);
+stage_meter(sx + floor(60 * S), cy + floor(5 * S), st_w - floor(60 * S) - pad, m_vca_gr);
+cy += bar_sp;
+_old = slider25; slider25 = draw_bar(sx + pad, cy, st_bw, bar_h, slider25, -40, 0, "Thresh", 1);
+slider25 != _old ? slider_automate(2^24);
+cy += bar_sp;
+_old = slider26; slider26 = lms_draw_mode_sel5(sx + pad, cy, st_bw, bar_h, slider26, 4, "Ratio", "1.5:1", "2:1", "4:1", "6:1", "10:1");
+slider26 != _old ? slider_automate(2^25);
+cy += bar_sp;
+_old = slider27; slider27 = draw_bar(sx + pad, cy, st_bw, bar_h, slider27, 0.1, 30, "Attack", 1);
+slider27 != _old ? slider_automate(2^26);
+cy += bar_sp;
+_old = slider28; slider28 = draw_bar(sx + pad, cy, st_bw, bar_h, slider28, 10, 1200, "Release", 1);
+slider28 != _old ? slider_automate(2^27);
+cy += bar_sp;
+_old = slider29; slider29 = lms_draw_toggle(sx + pad, cy, slider29, "Auto Release");
+slider29 != _old ? slider_automate(2^28);
+cy += bar_sp;
+_old = slider30; slider30 = draw_bar(sx + pad, cy, st_bw, bar_h, slider30, 0, 500, "SC HPF", 1);
+slider30 != _old ? slider_automate(2^29);
+cy += bar_sp;
+_old = slider31; slider31 = draw_bar(sx + pad, cy, st_bw, bar_h, slider31, 0, 24, "Makeup", 1);
+slider31 != _old ? slider_automate(2^30);
+cy += bar_sp;
+_old = slider32; slider32 = draw_bar(sx + pad, cy, st_bw, bar_h, slider32, 0, 100, "Mix %", 1);
+slider32 != _old ? slider_automate(2^31);
+
+last_cap = mouse_cap;
+
+// --- BUY + NOTICE BUTTONS ---
+lms_gfx_chrome(gfx_h - floor(20 * S));
+
+// ============================================================
+// @SERIALIZE — Persist follow state
+// ============================================================
+@serialize
+file_var(0, bc.bc_ser_compat_1);
+file_var(0, bc.bc_ser_compat_2);

@@ -74,6 +74,8 @@ RigProcessor::RigProcessor()
     }
 
     m_pedals.loadJsfxFile(m_lmsDir.getChildFile("lms_satans_pedalboard.jsfx").getFullPathName(), nullptr, false, false);
+    m_strip.loadJsfxFile(m_lmsDir.getChildFile("lms_rtw.jsfx").getFullPathName(), nullptr, false, false);
+    m_master.loadJsfxFile(m_lmsDir.getChildFile("lms_mega_increasinator.jsfx").getFullPathName(), nullptr, false, false);
     if (!m_ampPaths.isEmpty())
         loadAmp(0);
 }
@@ -177,7 +179,7 @@ bool RigProcessor::pollCabFromAmp()
 void RigProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     m_playHead.sampleRate = sampleRate;
-    for (YsfxProcessor *child : {&m_pedals, &m_amp}) {
+    for (YsfxProcessor *child : {&m_pedals, &m_amp, &m_strip, &m_master}) {
         child->setPlayHead(&m_playHead);
         child->setRateAndBufferSizeDetails(sampleRate, samplesPerBlock);
         child->prepareToPlay(sampleRate, samplesPerBlock);
@@ -188,6 +190,8 @@ void RigProcessor::releaseResources()
 {
     m_pedals.releaseResources();
     m_amp.releaseResources();
+    m_strip.releaseResources();
+    m_master.releaseResources();
 }
 
 void RigProcessor::runChild(YsfxProcessor &child, juce::AudioBuffer<float> &buffer, juce::MidiBuffer &midi, bool silenceIfBusy)
@@ -207,6 +211,10 @@ void RigProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuff
     juce::ScopedNoDenormals noDenormals;
     runChild(m_pedals, buffer, midi, false);
     runChild(m_amp, buffer, midi, true);
+    if (stripOn)
+        runChild(m_strip, buffer, midi, false);
+    if (masterOn)
+        runChild(m_master, buffer, midi, false);
     m_playHead.samples += buffer.getNumSamples();
 }
 
@@ -229,6 +237,7 @@ void RigProcessor::getStateInformation(juce::MemoryBlock &dest)
     root.setProperty("version", 1, nullptr);
     root.setProperty("hideInactive", hideInactivePedals, nullptr);
     root.setProperty("classicView", classicView, nullptr);
+    root.setProperty("tab", tab, nullptr);
     if (m_ampIndex >= 0)
         root.setProperty("amp", juce::File(m_ampPaths[m_ampIndex]).getFileName(), nullptr);
 
@@ -242,6 +251,16 @@ void RigProcessor::getStateInformation(juce::MemoryBlock &dest)
     juce::ValueTree pedals("pedals");
     pedals.setProperty("data", pedalState.toBase64Encoding(), nullptr);
     root.addChild(pedals, -1, nullptr);
+
+    root.setProperty("stripOn", stripOn.load(), nullptr);
+    root.setProperty("masterOn", masterOn.load(), nullptr);
+    for (auto [name, proc] : {std::pair<const char *, YsfxProcessor *>{"strip", &m_strip}, {"master", &m_master}}) {
+        juce::MemoryBlock mb;
+        proc->getStateInformation(mb);
+        juce::ValueTree t(name);
+        t.setProperty("data", mb.toBase64Encoding(), nullptr);
+        root.addChild(t, -1, nullptr);
+    }
 
     juce::ValueTree amps("amps");
     for (auto &[path, mb] : m_ampStates) {
@@ -263,10 +282,29 @@ void RigProcessor::setStateInformation(const void *data, int size)
         return;
     hideInactivePedals = root.getProperty("hideInactive", false);
     classicView = root.getProperty("classicView", false);
+    tab = juce::jlimit(0, 2, (int)root.getProperty("tab", 0));
 
     juce::MemoryBlock pedalState;
     if (pedalState.fromBase64Encoding(root.getChildWithName("pedals").getProperty("data").toString()))
         m_pedals.setStateInformation(pedalState.getData(), (int)pedalState.getSize());
+
+    // pre-amp-only rigs have neither; the stages then keep their defaults, switched out
+    stripOn = (bool)root.getProperty("stripOn", false);
+    masterOn = (bool)root.getProperty("masterOn", false);
+    for (auto [name, proc, file] : {std::tuple<const char *, YsfxProcessor *, const char *>{"strip", &m_strip, "lms_rtw.jsfx"},
+                                    {"master", &m_master, "lms_mega_increasinator.jsfx"}}) {
+        juce::MemoryBlock mb;
+        if (!mb.fromBase64Encoding(root.getChildWithName(name).getProperty("data").toString()))
+            continue;
+        juce::ValueTree t = juce::ValueTree::readFromData(mb.getData(), mb.getSize());
+        if (t.isValid()) {  // point the saved state at this machine's copy
+            t.setProperty("path", m_lmsDir.getChildFile(file).getFullPathName(), nullptr);
+            mb.reset();
+            juce::MemoryOutputStream st(mb, false);
+            t.writeToStream(st);
+        }
+        proc->setStateInformation(mb.getData(), (int)mb.getSize());
+    }
 
     // stored by filename so the rig survives the LMS folder moving
     m_ampStates.clear();
@@ -317,6 +355,47 @@ constexpr int kBottomHeight = 800;
 constexpr int kSideWidth = 340;               // head picker + cab, right of the amp
 constexpr int kAmpArea = kWidth - kSideWidth;  // amp is scaled to fill this
 constexpr int kHeight = kPedalHeight + kBottomHeight;
+constexpr int kTabH = 46;                     // AMP / CHANNEL STRIP / MASTER, above the bottom panels
+constexpr int kStageY = kPedalHeight + kTabH;
+constexpr int kStageH = kBottomHeight - kTabH;
+
+const juce::Colour kStripAccent{0xff2fa4a8};
+const juce::Colour kMasterAccent{0xffe0a020};
+
+// RTW, bound by slider name
+const std::vector<rigui::RackSectionDef> kStripSections = {
+    {"PREAMP", nullptr, nullptr, nullptr, {"Preamp Drive (dB)|Drive", "Saturation Mode|Saturation"}},
+    {"FILTERS", nullptr, nullptr, nullptr, {"HPF", "HPF Freq (Hz)|HPF Freq", "LPF", "LPF Freq (Hz)|LPF Freq"}},
+    {"EQ", nullptr, nullptr, nullptr,
+     {"Low Shelf (dB)|Low", "Low Freq (Hz)|Low Freq", "Low-Mid (dB)|Low-Mid", "Low-Mid Freq (Hz)|LM Freq", "Low-Mid Q|LM Q",
+      "Hi-Mid (dB)|Hi-Mid", "Hi-Mid Freq (Hz)|HM Freq", "Hi-Mid Q|HM Q", "High Shelf (dB)|High", "High Freq (Hz)|High Freq"}},
+    {"COMPRESSOR", "Compressor", "comp_gr_db", "Comp ",
+     {"Comp Threshold (dB)", "Comp Ratio", "Comp Attack (ms)", "Comp Release (ms)", "Auto Release", "Sidechain HPF|SC HPF",
+      "SC HPF Freq (Hz)|SC Freq", "Comp Makeup (dB)", "Comp Mix (%)"}},
+    {"REVERB", nullptr, nullptr, "Reverb ", {"Reverb Type", "Reverb Mix (%)", "Reverb Tone", "Reverb Position"}},
+    {"GATE", "Gate", nullptr, "Gate ", {"Gate Threshold (dB)", "Gate Hold (ms)", "Gate Release (ms)"}},
+    {"OUTPUT", nullptr, nullptr, nullptr, {"Output Gain (dB)|Output"}},
+};
+
+// Mega Increasinator, in signal order
+const std::vector<rigui::RackSectionDef> kMasterSections = {
+    {"INPUT", nullptr, nullptr, nullptr, {"Input Gain (dB)|Input", "Lo Crossover (Hz) [0=Off]|Lo Xover"}},
+    {"FET", "FET", "m_fet_gr", "FET ",
+     {"FET Threshold (dB)", "FET Ratio", "FET Attack (ms)", "FET Release (ms)", "FET Output (dB)", "FET Drive", "FET Mix (%)"}},
+    {"OPTO", "OPTO", "m_opto_gr", "Opto ",
+     {"Opto Peak Reduction (%)|Peak Red", "Opto Gain (dB)", "Opto Mode", "Opto Emphasis (%)", "Opto Warmth (%)", "Opto Mix (%)"}},
+    {"VCA", "VCA", "m_vca_gr", "VCA ",
+     {"VCA Threshold (dB)", "VCA Ratio", "VCA Attack (ms)", "VCA Release (ms)", "VCA Auto Release|Auto Rel",
+      "VCA SC HPF (Hz) [0=Off]|SC HPF", "VCA Makeup (dB)", "VCA Mix (%)"}},
+    {"REACTIVE EQ", nullptr, nullptr, nullptr, {"EQ Profile|Profile", "EQ Intensity (%)|Intensity"}},
+    {"LIMITER", nullptr, "m_lim_gr", nullptr, {"Target Loudness (dB)|Target", "Ceiling (dBFS)|Ceiling", "Release (ms)|Release"}},
+};
+
+const std::vector<rigui::RackReadout> kMasterReadouts = {
+    {"LUFS S", "lufs_s", false},
+    {"LUFS I", "lufs_i", false},
+    {"PEAK", "out_peak", true},
+};
 
 // Cab load vs the amp's impedance tap, read from the head's own variables
 struct MatchLight : juce::Component {
@@ -356,7 +435,9 @@ struct MatchLight : juce::Component {
 class RigEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit RigEditor(RigProcessor &p)
-        : AudioProcessorEditor(p), m_proc(p)
+        : AudioProcessorEditor(p), m_proc(p),
+          m_stripPanel(kStripSections, {}, kStripAccent),
+          m_masterPanel(kMasterSections, kMasterReadouts, kMasterAccent)
     {
         setLookAndFeel(&m_lnf);
 
@@ -367,6 +448,27 @@ public:
         m_content.addChildComponent(m_pedalPanel);
         m_content.addChildComponent(m_ampView);
         m_content.addChildComponent(m_ampPanel);
+        m_content.addChildComponent(m_stripView);
+        m_content.addChildComponent(m_stripPanel);
+        m_content.addChildComponent(m_masterView);
+        m_content.addChildComponent(m_masterPanel);
+
+        // AMP / CHANNEL STRIP / MASTER
+        for (int i = 0; i < 3; ++i) {
+            m_tabs[i].setClickingTogglesState(true);
+            m_tabs[i].setRadioGroupId(1);
+            m_tabs[i].setColour(juce::TextButton::buttonOnColourId, i == 0 ? kAccent : i == 1 ? kStripAccent : kMasterAccent);
+            m_tabs[i].onClick = [this, i] {
+                if (m_tabs[i].getToggleState()) {
+                    m_proc.tab = i;
+                    applyView();
+                }
+            };
+            m_content.addAndMakeVisible(m_tabs[i]);
+        }
+        m_tabs[m_proc.tab].setToggleState(true, juce::dontSendNotification);
+        m_stripPanel.inChain().onClick = [this] { m_proc.stripOn = m_stripPanel.inChain().getToggleState(); updateTabs(); };
+        m_masterPanel.inChain().onClick = [this] { m_proc.masterOn = m_masterPanel.inChain().getToggleState(); updateTabs(); };
         m_pedalPanel.onHideInactiveChanged = [this](bool hide) { m_proc.hideInactivePedals = hide; };
 
         // amp head picker
@@ -421,6 +523,8 @@ public:
     {
         m_pedalView.setEffect(nullptr);
         m_ampView.setEffect(nullptr);
+        m_stripView.setEffect(nullptr);
+        m_masterView.setEffect(nullptr);
         setLookAndFeel(nullptr);
     }
 
@@ -470,18 +574,42 @@ private:
     void applyView()
     {
         const bool classic = m_proc.classicView;
+        const int tab = m_proc.tab;
         m_pedalClip.setBounds(0, 0, kWidth, classic ? kPedalHeight : kPedalHeader);
         m_pedalPanel.setVisible(!classic);
-        m_ampPanel.setVisible(!classic);
-        m_ampView.setVisible(classic);
+        m_ampPanel.setVisible(!classic && tab == 0);
+        m_ampView.setVisible(classic && tab == 0);
+        m_stripPanel.setVisible(!classic && tab == 1);
+        m_stripView.setVisible(classic && tab == 1);
+        m_masterPanel.setVisible(!classic && tab == 2);
+        m_masterView.setVisible(classic && tab == 2);
+        updateTabs();
+    }
+
+    void updateTabs()
+    {
+        // a dot on the tab when that stage is in the chain
+        const juce::String dot = juce::CharPointer_UTF8("  \xe2\x97\x8f");
+        m_tabs[0].setButtonText("AMP");
+        m_tabs[1].setButtonText("CHANNEL STRIP" + (m_proc.stripOn ? dot : juce::String()));
+        m_tabs[2].setButtonText("MASTER" + (m_proc.masterOn ? dot : juce::String()));
+        m_stripPanel.inChain().setToggleState(m_proc.stripOn, juce::dontSendNotification);
+        m_masterPanel.inChain().setToggleState(m_proc.masterOn, juce::dontSendNotification);
     }
 
     void layoutContent()
     {
         m_pedalView.setBounds(0, 0, kWidth, kPedalHeight);
         m_pedalPanel.setBounds(0, kPedalHeader, kWidth, kPedalHeight - kPedalHeader);
-        m_ampPanel.setBounds(0, kPedalHeight, kAmpArea, kBottomHeight);
-        layoutAmpView();
+        m_ampPanel.setBounds(0, kStageY, kAmpArea, kStageH);
+        m_stripPanel.setBounds(0, kStageY, kAmpArea, kStageH);
+        m_masterPanel.setBounds(0, kStageY, kAmpArea, kStageH);
+        const int tabW = 220;
+        for (int i = 0; i < 3; ++i)
+            m_tabs[i].setBounds(20 + i * (tabW + 8), kPedalHeight + 10, tabW, kTabH - 12);
+        layoutView(m_ampView, m_proc.amp());
+        layoutView(m_stripView, m_proc.strip());
+        layoutView(m_masterView, m_proc.master());
 
         const int x0 = kAmpArea + 20, w = kSideWidth - 40;
         int y = kPedalHeight + 20;
@@ -517,11 +645,11 @@ private:
         m_classic.setBounds(x0 + w / 2 - 70, kHeight - 50, 140, 30);
     }
 
-    void layoutAmpView()
+    void layoutView(YsfxGraphicsView &view, YsfxProcessor &proc)
     {
-        // scale the head's canvas to fill the amp area; the JSFX scale themselves off gfx_w
+        // scale the JSFX canvas to fill the stage area; the JSFX scale themselves off gfx_w
         int w = 600, h = 564;
-        if (auto info = m_proc.amp().getCurrentInfo()) {
+        if (auto info = proc.getCurrentInfo()) {
             uint32_t dim[2] = {};
             if (info->effect && ysfx_get_gfx_dim(info->effect.get(), dim) && dim[0] && dim[1]) {
                 w = (int)dim[0];
@@ -529,9 +657,9 @@ private:
             }
         }
         const int pad = 16;
-        double s = juce::jmin((kAmpArea - 2.0 * pad) / w, (kBottomHeight - 2.0 * pad) / h);
+        double s = juce::jmin((kAmpArea - 2.0 * pad) / w, (kStageH - 2.0 * pad) / h);
         int sw = juce::roundToInt(w * s), sh = juce::roundToInt(h * s);
-        m_ampView.setBounds((kAmpArea - sw) / 2, kPedalHeight + (kBottomHeight - sh) / 2, sw, sh);
+        view.setBounds((kAmpArea - sw) / 2, kStageY + (kStageH - sh) / 2, sw, sh);
     }
 
     void step(int dir)
@@ -583,7 +711,7 @@ private:
             m_ampInfo = info;
             m_ampBox.setSelectedItemIndex(m_proc.ampIndex(), juce::dontSendNotification);  // head may change under us (state load)
             m_ampView.setEffect(info ? info->effect.get() : nullptr);
-            layoutAmpView();
+            layoutView(m_ampView, m_proc.amp());
             m_ampPanel.build(m_proc.amp(), juce::StringArray(kCabSliderNames, numCabKeys));
             m_ampPanel.sendLookAndFeelChange();
             fillCabTypes(m_typeA, cabType);
@@ -593,25 +721,48 @@ private:
             m_loadVar = fx ? ysfx_find_var(fx, "cab_load_ohms") : nullptr;
             m_tapVar = fx ? ysfx_find_var(fx, "amp_designed_ohms") : nullptr;
         }
+        if (auto info = m_proc.strip().getCurrentInfo(); info != m_stripInfo) {
+            m_stripInfo = info;
+            m_stripView.setEffect(info ? info->effect.get() : nullptr);
+            layoutView(m_stripView, m_proc.strip());
+            m_stripPanel.build(m_proc.strip());
+            m_stripPanel.sendLookAndFeelChange();
+            updateTabs();  // a state load may have switched the stages
+        }
+        if (auto info = m_proc.master().getCurrentInfo(); info != m_masterInfo) {
+            m_masterInfo = info;
+            m_masterView.setEffect(info ? info->effect.get() : nullptr);
+            layoutView(m_masterView, m_proc.master());
+            m_masterPanel.build(m_proc.master());
+            m_masterPanel.sendLookAndFeelChange();
+            updateTabs();
+        }
         m_match.set(m_loadVar ? *m_loadVar : 0.0, m_tapVar ? *m_tapVar : 0.0);
         if (m_proc.pollCabFromAmp())
             refreshCab();
         if (!m_proc.classicView) {
             m_pedalPanel.sync();
-            m_ampPanel.sync();
+            if (m_proc.tab == 0)
+                m_ampPanel.sync();
+            else if (m_proc.tab == 1)
+                m_stripPanel.sync();
+            else
+                m_masterPanel.sync();
         }
     }
 
     RigProcessor &m_proc;
     rigui::RigLookAndFeel m_lnf;
-    YsfxInfo::Ptr m_pedalInfo, m_ampInfo;
+    YsfxInfo::Ptr m_pedalInfo, m_ampInfo, m_stripInfo, m_masterInfo;
     ysfx_real *m_loadVar = nullptr, *m_tapVar = nullptr;  // live in the head's VM
 
     Content m_content;
     juce::Component m_pedalClip;  // shows the whole JSFX board, or just its header + tuner
-    YsfxGraphicsView m_pedalView, m_ampView;
+    YsfxGraphicsView m_pedalView, m_ampView, m_stripView, m_masterView;
     rigui::PedalboardPanel m_pedalPanel;
     rigui::AmpPanel m_ampPanel;
+    rigui::RackPanel m_stripPanel, m_masterPanel;
+    juce::TextButton m_tabs[3];
     juce::TextButton m_prev, m_next;
     rigui::ClickCombo m_ampBox;
 

@@ -1,4 +1,5 @@
-// LMS Rig — standalone host: Satan's Little Pedal Board -> amp head -> cab.
+// LMS Rig — standalone host: Satan's Little Pedal Board -> amp head -> cab,
+// then optionally RTW (channel strip) -> Mega Increasinator (comps + limiter).
 // Built on top of ysfx (JSFX runtime). Each section is a YsfxProcessor.
 // The cab DSP stays inside the amp (it needs the amp's density + load ohms),
 // so the cab section here is persistent state pushed into whichever head is loaded.
@@ -7,6 +8,7 @@
 #include "processor.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <array>
+#include <atomic>
 #include <map>
 
 class YsfxParameter;
@@ -21,6 +23,11 @@ public:
 
     YsfxProcessor &pedals() { return m_pedals; }
     YsfxProcessor &amp() { return m_amp; }
+    YsfxProcessor &strip() { return m_strip; }
+    YsfxProcessor &master() { return m_master; }
+
+    // the post-amp stages are in the chain only when switched in
+    std::atomic<bool> stripOn{false}, masterOn{false};
 
     const juce::StringArray &ampNames() const { return m_ampNames; }
     int ampIndex() const { return m_ampIndex; }
@@ -35,6 +42,7 @@ public:
     // editor view prefs, saved with the rig
     bool hideInactivePedals = false;
     bool classicView = false;  // the JSFX's own UIs instead of the native panels
+    int tab = 0;  // bottom area: 0 amp, 1 channel strip, 2 master
 
     //==========================================================================
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
@@ -72,6 +80,8 @@ private:
 
     YsfxProcessor m_pedals;
     YsfxProcessor m_amp;
+    YsfxProcessor m_strip;
+    YsfxProcessor m_master;
     StubPlayHead m_playHead;
 
     juce::File m_lmsDir;
