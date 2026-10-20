@@ -2977,39 +2977,41 @@ function lms_yin_write(x)
   this.write_pos = (this.write_pos + 1) % this.buf_len;
 );
 
-// Run YIN pitch detection. Call once per @block.
-// Results available in this.freq, this.confidence, this.midi_note, etc.
-function lms_yin_detect()
-  local(start, k, tau, j, sum, running_sum, best_tau, best_val,
-        min_val, s0, s1, s2, denom, refined_tau, raw_freq,
-        midi_f, delta)
+// Copy the circular buffer segment to the linear workspace (start of a detection).
+function lms_yin_snapshot()
+  local(start, k)
 (
-  // --- Copy circular buffer segment to linear workspace ---
   start = (this.write_pos - this.W - this.tau_max + this.buf_len * 2) % this.buf_len;
   k = 0;
   loop(this.W + this.tau_max,
     this.lin[k] = this.buf[(start + k) % this.buf_len];
     k += 1;
   );
+);
 
-  // --- Step 1: Difference function d(tau) ---
-  tau = 0;
-  loop(this.tau_max + 1,
-    tau == 0 ? (
-      this.yin[0] = 0;
-    ) : (
-      sum = 0;
-      j = 0;
-      loop(this.W,
-        delta = this.lin[j] - this.lin[j + tau];
-        sum += delta * delta;
-        j += 1;
-      );
-      this.yin[tau] = sum;
+// Step 1: difference function d(tau) for lags t0..t1 (the expensive part, W ops per lag)
+function lms_yin_diff(t0, t1)
+  local(tau, j, sum, delta)
+(
+  tau = t0;
+  loop(t1 - t0 + 1,
+    sum = 0;
+    j = 0;
+    loop(this.W,
+      delta = this.lin[j] - this.lin[j + tau];
+      sum += delta * delta;
+      j += 1;
     );
+    this.yin[tau] = sum;
     tau += 1;
   );
+);
 
+// Steps 2-8 on a completed difference function
+function lms_yin_finish()
+  local(tau, running_sum, best_tau, best_val,
+        min_val, s0, s1, s2, denom, refined_tau, raw_freq, midi_f)
+(
   // --- Step 2: Cumulative Mean Normalized Difference ---
   this.yin[0] = 1;
   running_sum = 0;
@@ -3110,6 +3112,35 @@ function lms_yin_detect()
     this.midi_int = 0;
     this.cents = 0;
   );
+);
+
+// Run YIN pitch detection in one go. Call once per @block.
+// Results available in this.freq, this.confidence, this.midi_note, etc.
+function lms_yin_detect()
+(
+  this.lms_yin_snapshot();
+  this.lms_yin_diff(1, this.tau_max);
+  this.lms_yin_finish();
+);
+
+// Sliced detection for the audio thread: computes n lags per call, so a full
+// pass (tau_max * W ops) is spread over several blocks instead of landing in
+// one. Returns 1 on the call that finishes a pass (results then updated).
+function lms_yin_step(n)
+  local(t1)
+(
+  this.step_tau < 1 ? (
+    this.lms_yin_snapshot();
+    this.step_tau = 1;
+  );
+  t1 = min(this.step_tau + n - 1, this.tau_max);
+  this.lms_yin_diff(this.step_tau, t1);
+  this.step_tau = t1 + 1;
+  this.step_tau > this.tau_max ? (
+    this.lms_yin_finish();
+    this.step_tau = 0;
+    1;
+  ) : 0;
 );
 
 
@@ -3977,11 +4008,9 @@ function lms_tuner_init(yin_buf)
   this.disp_midi  = 0;
   this.disp_alive = 0;        // 0..1: confidence-weighted aliveness; fades when no signal
 
-  // YIN detection is decimated — it costs ~300k ops per call. Detecting
-  // every block can starve the audio thread on small buffer sizes (clicks).
-  // Running every Nth block gives plenty of update rate for a tuner UI.
-  this.detect_counter  = 0;
-  this.detect_interval = 4;
+  // YIN costs ~420k ops per full pass; lms_tuner_block slices it across
+  // blocks (lms_yin_step) so small buffer sizes don't drop out.
+  this.yin.step_tau = 0;
 
   // Mute control — click MUTE to fade output to silence (5ms ramp)
   this.mute_on    = 0;
@@ -4003,10 +4032,8 @@ function lms_tuner_write(x)
 function lms_tuner_block()
 (
   this.on ? (
-    this.detect_counter += 1;
-    this.detect_counter >= this.detect_interval ? (
-      this.detect_counter = 0;
-      this.yin.lms_yin_detect();
+    // a full pass every ~1024 samples, sliced evenly across blocks
+    this.yin.lms_yin_step(ceil((this.yin.tau_max + 1) * samplesblock / 1024)) ? (
       // Tighter confidence gate (was 0.6) — refuses noise that produced
       // jitter; heavy smoothing on cents (alpha 0.18) keeps the needle
       // calm so it doesn't dance around.
