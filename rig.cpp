@@ -6,6 +6,8 @@
 #include "components/graphics_view.h"
 #include "ysfx.h"
 #include "BinaryData.h"
+#include <unistd.h>
+#include <sys/wait.h>
 
 static const char *const kCabSliderNames[numCabKeys] = {
     "Cabinet", "Cab Sim", "Mic Distance (%)", "Cabinet B", "Mic B Distance (%)", "Speaker Breakup (%)",
@@ -80,7 +82,428 @@ RigProcessor::RigProcessor()
         loadAmp(0);
 }
 
-RigProcessor::~RigProcessor() = default;
+RigProcessor::~RigProcessor()
+{
+    stopRecording();
+    m_recThread.stopThread(2000);
+}
+
+//==============================================================================
+juce::File RigProcessor::recordingsDir()
+{
+    return juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("LMS Rig");
+}
+
+bool RigProcessor::startRecording()
+{
+    stopRecording();
+    auto dir = recordingsDir();
+    if (!dir.createDirectory())
+        return false;
+    const juce::String stamp = juce::Time::getCurrentTime().formatted("%Y-%m-%d %H.%M.%S");
+    juce::File out = dir.getChildFile("Idea " + stamp + ".wav");
+    juce::File di = dir.getChildFile("Idea " + stamp + " DI.wav");
+
+    auto make = [this](const juce::File &f) -> std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> {
+        f.deleteFile();
+        std::unique_ptr<juce::FileOutputStream> os(f.createOutputStream());
+        if (!os || os->failedToOpen())
+            return nullptr;
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w(wav.createWriterFor(os.get(), m_rate, 2, 24, {}, 0));
+        if (!w)
+            return nullptr;
+        os.release();  // the writer owns the stream now
+        return std::make_unique<juce::AudioFormatWriter::ThreadedWriter>(w.release(), m_recThread, 1 << 16);
+    };
+
+    if (!m_recThread.isThreadRunning())
+        m_recThread.startThread();
+    auto o = make(out);
+    auto d = make(di);
+    if (!o || !d) {
+        out.deleteFile();
+        di.deleteFile();
+        return false;
+    }
+    m_recFrames = 0;
+    {
+        const juce::SpinLock::ScopedLockType lock(m_recLock);
+        m_recOut = std::move(o);
+        m_recDi = std::move(d);
+        m_recDiWriter = m_recDi.get();
+        m_recWriter = m_recOut.get();
+    }
+    m_lastRecording = out;
+    return true;
+}
+
+void RigProcessor::stopRecording()
+{
+    const bool was = isRecording();
+    {
+        const juce::SpinLock::ScopedLockType lock(m_recLock);
+        m_recWriter = nullptr;
+        m_recDiWriter = nullptr;
+    }
+    // destroying a ThreadedWriter flushes what is buffered and closes the file
+    m_recOut.reset();
+    m_recDi.reset();
+    if (!was || !m_lastRecording.existsAsFile())
+        return;
+
+    // the sidecar: what this take was played through
+    auto *o = new juce::DynamicObject();
+    o->setProperty("take", m_lastRecording.getFileName());
+    o->setProperty("di", m_lastRecording.getSiblingFile(m_lastRecording.getFileNameWithoutExtension() + " DI.wav").getFileName());
+    o->setProperty("stamp", m_lastRecording.getFileNameWithoutExtension().fromFirstOccurrenceOf("Idea ", false, false));
+    o->setProperty("time", juce::Time::getCurrentTime().toMilliseconds());
+    o->setProperty("seconds", recordedSeconds());
+    o->setProperty("rate", m_rate);
+    o->setProperty("settings", settingsNow());
+    juce::MemoryBlock state;
+    getStateInformation(state);
+    o->setProperty("state", juce::Base64::toBase64(state.getData(), state.getSize()));
+    m_lastRecording.withFileExtension("json").replaceWithText(juce::JSON::toString(juce::var(o)));
+}
+
+// Every slider the JSFX defines, by 1-based number as REAPER counts them;
+// a path slider is its string, which REAPER writes as "".
+juce::var RigProcessor::stageSliders(const YsfxProcessor &child)
+{
+    auto *o = new juce::DynamicObject();
+    if (auto info = const_cast<YsfxProcessor &>(child).getCurrentInfo()) {
+        ysfx_t *fx = info->effect.get();
+        if (fx) {
+            o->setProperty("file", juce::File(juce::CharPointer_UTF8(ysfx_get_file_path(fx))).getFileName());
+            auto *s = new juce::DynamicObject();
+            for (uint32_t i = 0; i < ysfx_max_sliders; ++i) {
+                if (!ysfx_slider_exists(fx, i))
+                    continue;
+                if (ysfx_slider_is_path(fx, i))
+                    s->setProperty(juce::String(i + 1), juce::String(juce::CharPointer_UTF8(ysfx_slider_path(fx, i))));
+                else
+                    s->setProperty(juce::String(i + 1), (double)ysfx_slider_get_value(fx, i));
+            }
+            o->setProperty("sliders", juce::var(s));
+        }
+    }
+    return juce::var(o);
+}
+
+juce::var RigProcessor::settingsNow() const
+{
+    auto *o = new juce::DynamicObject();
+    o->setProperty("ampFile", m_ampIndex >= 0 ? juce::File(m_ampPaths[m_ampIndex]).getFileName() : juce::String());
+    o->setProperty("ampName", m_ampIndex >= 0 ? m_ampNames[m_ampIndex] : juce::String());
+    o->setProperty("stripOn", stripOn.load());
+    o->setProperty("masterOn", masterOn.load());
+    o->setProperty("clickOn", clickOn.load());
+    o->setProperty("bpm", clickBpm.load());
+    auto *cab = new juce::DynamicObject();
+    for (int k = 0; k < numCabKeys; ++k)
+        cab->setProperty(kCabSliderNames[k], m_cab[(size_t)k]);
+    o->setProperty("cab", juce::var(cab));
+    o->setProperty("pedals", stageSliders(m_pedals));
+    o->setProperty("amp", stageSliders(m_amp));
+    o->setProperty("strip", stageSliders(m_strip));
+    o->setProperty("master", stageSliders(m_master));
+    return juce::var(o);
+}
+
+std::vector<RigProcessor::Idea> RigProcessor::ideas(const juce::String &ampFile)
+{
+    std::vector<Idea> out;
+    for (const auto &f : recordingsDir().findChildFiles(juce::File::findFiles, false, "Idea *.json")) {
+        juce::var v = juce::JSON::parse(f);
+        if (!v.isObject())
+            continue;
+        Idea idea;
+        idea.json = f;
+        idea.take = f.getSiblingFile(v["take"].toString());
+        idea.di = f.getSiblingFile(v["di"].toString());
+        idea.stamp = v["stamp"].toString();
+        idea.seconds = (double)v["seconds"];
+        idea.time = (juce::int64)v["time"];
+        auto s = v["settings"];
+        idea.ampFile = s["ampFile"].toString();
+        idea.ampName = s["ampName"].toString();
+        idea.bpm = (double)s["bpm"];
+        if (ampFile.isNotEmpty() && idea.ampFile != ampFile)
+            continue;
+        if (!idea.take.existsAsFile())
+            continue;
+        out.push_back(std::move(idea));
+    }
+    std::sort(out.begin(), out.end(), [](const Idea &a, const Idea &b) { return a.time > b.time; });
+    return out;
+}
+
+// fork/exec, detached. xdg-open hangs on this desktop (xdg-mime never
+// returns), so the file manager and REAPER are started directly.
+static bool launchDetached(const juce::StringArray &argv)
+{
+    if (argv.isEmpty() || !juce::File(argv[0]).existsAsFile())
+        return false;
+    std::vector<std::string> strs;
+    std::vector<char *> ptrs;
+    for (const auto &a : argv)
+        strs.push_back(a.toStdString());
+    for (auto &s : strs)
+        ptrs.push_back(s.data());
+    ptrs.push_back(nullptr);
+    pid_t pid = fork();
+    if (pid < 0)
+        return false;
+    if (pid == 0) {
+        setsid();
+        if (fork() != 0)
+            _exit(0);  // grandchild carries on, nothing waits on it
+        execv(ptrs[0], ptrs.data());
+        _exit(127);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return true;
+}
+
+static juce::String findExe(std::initializer_list<const char *> names)
+{
+    juce::StringArray dirs;
+    dirs.addTokens(juce::SystemStats::getEnvironmentVariable("PATH", "/usr/local/bin:/usr/bin:/bin"), ":", "");
+    dirs.insert(0, "/usr/local/bin");
+    for (const char *n : names)
+        for (const auto &d : dirs)
+            if (juce::File(d).getChildFile(n).existsAsFile())
+                return juce::File(d).getChildFile(n).getFullPathName();
+    return {};
+}
+
+bool RigProcessor::revealDir(const juce::File &dir)
+{
+    dir.createDirectory();
+    juce::String fm = findExe({"dolphin", "nautilus", "thunar", "pcmanfm", "nemo", "xdg-open"});
+    return fm.isNotEmpty() && launchDetached({fm, dir.getFullPathName()});
+}
+
+static juce::String rppGuid()
+{
+    return "{" + juce::Uuid().toDashedString().toUpperCase() + "}";
+}
+
+static juce::String rppNumber(double v)
+{
+    juce::String s(v, 6);
+    if (s.contains("."))
+        s = s.trimCharactersAtEnd("0").trimCharactersAtEnd(".");
+    return s.isEmpty() ? "0" : s;
+}
+
+// <JS "LMS Plugins/LMS/<file>" "" + one line of every slider, "-" where none
+static juce::String rppJs(const juce::var &stage)
+{
+    juce::String file = stage["file"].toString();
+    if (file.isEmpty())
+        return {};
+    auto sliders = stage["sliders"];
+    int last = 64;
+    if (auto *o = sliders.getDynamicObject())
+        for (const auto &p : o->getProperties())
+            last = juce::jmax(last, p.name.toString().getIntValue());
+    juce::StringArray vals;
+    for (int i = 1; i <= last; ++i) {
+        auto v = sliders.getProperty(juce::Identifier(juce::String(i)), juce::var());
+        vals.add(v.isVoid() ? "-" : v.isString() ? "\"\"" : rppNumber((double)v));
+    }
+    juce::String s;
+    s << "      BYPASS 0 0 0\n"
+      << "      <JS \"LMS Plugins/LMS/" << file << "\" \"\"\n"
+      << "        " << vals.joinIntoString(" ") << "\n"
+      << "      >\n"
+      << "      FXID " << rppGuid() << "\n"
+      << "      WAK 0 0\n";
+    return s;
+}
+
+// The LMS Rig VST3 on a track, with the state blob the take was played
+// through. REAPER's VST chunk, as decoded from its own files:
+//   header line:  id, EE5EEDFE, ins + 64-bit masks, outs + masks, size, 1, FFFF1080
+//   body lines:   the plugin state, base64, 128 chars a line
+//   last line:    AAAQAAAA (empty program name)
+// The id and class id are what REAPER registered the plugin under; read
+// from its plugin list when present, else the values it gave this build.
+static juce::String rppVst(const juce::String &stateB64)
+{
+    juce::String id = "753583815", fuid = "ABCDEF019182FAEB4C4D53784C726967";
+    auto ini = juce::File("~/.config/REAPER/reaper-vstplugins64.ini");
+    if (ini.existsAsFile()) {
+        juce::StringArray lines;
+        ini.readLines(lines);
+        for (const auto &l : lines) {
+            if (!l.startsWith("LMS_Rig.vst3="))
+                continue;
+            auto reg = l.fromFirstOccurrenceOf(",", false, false);  // "753583815{ABCD...,LMS Rig (LMS)"
+            id = reg.upToFirstOccurrenceOf("{", false, false).trim();
+            fuid = reg.fromFirstOccurrenceOf("{", false, false).upToFirstOccurrenceOf(",", false, false).trim();
+            break;
+        }
+    }
+    juce::MemoryOutputStream state;
+    juce::Base64::convertFromBase64(state, stateB64);
+
+    juce::MemoryOutputStream head;
+    head.writeInt((int)id.getLargeIntValue());
+    const uint8_t magic[] = {0xEE, 0x5E, 0xED, 0xFE};
+    head.write(magic, 4);
+    head.writeInt(2);
+    head.writeInt64(1);
+    head.writeInt64(2);
+    head.writeInt(2);
+    head.writeInt64(1);
+    head.writeInt64(2);
+    head.writeInt((int)state.getDataSize());
+    head.writeInt(1);
+    const uint8_t tail[] = {0xFF, 0xFF, 0x10, 0x80};
+    head.write(tail, 4);
+
+    juce::String body = juce::Base64::toBase64(state.getData(), state.getDataSize());
+    juce::String s;
+    s << "      BYPASS 0 0 0\n"
+      << "      <VST \"VST3: LMS Rig (LMS)\" \"LMS Rig.vst3\" 0 \"\" " << id << "{" << fuid << "} \"\"\n"
+      << "        " << juce::Base64::toBase64(head.getData(), head.getDataSize()) << "\n";
+    for (int i = 0; i < body.length(); i += 128)
+        s << "        " << body.substring(i, i + 128) << "\n";
+    s << "        AAAQAAAA\n"
+      << "      >\n"
+      << "      FXID " << rppGuid() << "\n"
+      << "      WAK 0 0\n";
+    return s;
+}
+
+static juce::String rppItem(const juce::File &wav, double seconds)
+{
+    juce::String s;
+    s << "    <ITEM\n"
+      << "      POSITION 0\n"
+      << "      LENGTH " << rppNumber(seconds) << "\n"
+      << "      LOOP 0\n"
+      << "      IGUID " << rppGuid() << "\n"
+      << "      NAME \"" << wav.getFileName() << "\"\n"
+      << "      GUID " << rppGuid() << "\n"
+      << "      <SOURCE WAVE\n"
+      << "        FILE \"" << wav.getFullPathName() << "\"\n"
+      << "      >\n"
+      << "    >\n";
+    return s;
+}
+
+bool RigProcessor::openInReaper(const Idea &idea, juce::String &error)
+{
+    juce::var v = juce::JSON::parse(idea.json);
+    if (!v.isObject()) {
+        error = "no sidecar for that take";
+        return false;
+    }
+    auto s = v["settings"];
+    const double bpm = (double)s["bpm"] > 0 ? (double)s["bpm"] : 120.0;
+
+    juce::String p;
+    p << "<REAPER_PROJECT 0.1 \"7.25/linux-x86_64\" " << (int64_t)(juce::Time::currentTimeMillis() / 1000) << "\n"
+      << "  TEMPO " << rppNumber(bpm) << " 4 4\n"
+      << "  <TRACK " << rppGuid() << "\n"
+      << "    NAME \"Idea " << idea.stamp << "\"\n"
+      << "    PEAKCOL 16576\n"
+      << "    MUTESOLO 0 0 0\n"
+      << "    NCHAN 2\n"
+      << "    FX 1\n"
+      << "    MAINSEND 1 0\n"
+      << rppItem(idea.take, idea.seconds)
+      << "  >\n"
+      << "  <TRACK " << rppGuid() << "\n"
+      << "    NAME \"Guitar DI - " << s["ampName"].toString() << "\"\n"
+      << "    PEAKCOL 2763519\n"
+      << "    MUTESOLO 1 0 0\n"   // muted: the idea track is the sound, this is the re-amp
+      << "    NCHAN 2\n"
+      << "    FX 1\n"
+      << "    MAINSEND 1 0\n"
+      << "    <FXCHAIN\n"
+      << "      SHOW 0\n"
+      << "      LASTSEL 0\n"
+      << "      DOCKED 0\n";
+    if (v["state"].isString()) {
+        // the rig itself, exactly as it was
+        p << rppVst(v["state"].toString());
+    } else {
+        // an older sidecar: the chain as JSFX, knob by knob
+        p << rppJs(s["pedals"]) << rppJs(s["amp"]);
+        if ((bool)s["stripOn"])
+            p << rppJs(s["strip"]);
+        if ((bool)s["masterOn"])
+            p << rppJs(s["master"]);
+    }
+    p << "    >\n"
+      << rppItem(idea.di, idea.seconds)
+      << "  >\n"
+      << ">\n";
+
+    juce::File rpp = idea.json.withFileExtension("RPP");
+    if (!rpp.replaceWithText(p)) {
+        error = "could not write " + rpp.getFileName();
+        return false;
+    }
+    juce::String reaper = findExe({"reaper"});
+    if (reaper.isEmpty()) {
+        error = "reaper not found on PATH; project written: " + rpp.getFileName();
+        return false;
+    }
+    launchDetached({reaper, rpp.getFullPathName()});
+    return true;
+}
+
+//==============================================================================
+bool RigProcessor::playIdea(const Idea &idea)
+{
+    stopIdea();
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r(fm.createReaderFor(idea.take));
+    if (!r || r->lengthInSamples <= 0)
+        return false;
+    auto buf = std::make_shared<PlayBuf>();
+    buf->rate = r->sampleRate;
+    buf->audio.setSize(2, (int)r->lengthInSamples);
+    r->read(&buf->audio, 0, (int)r->lengthInSamples, 0, true, true);
+    if (r->numChannels == 1)
+        buf->audio.copyFrom(1, 0, buf->audio, 0, 0, buf->audio.getNumSamples());
+    m_playPos = 0.0;
+    {
+        const juce::SpinLock::ScopedLockType lock(m_playLock);
+        m_playHold = buf;
+        m_playBuf = buf.get();
+    }
+    return true;
+}
+
+void RigProcessor::stopIdea()
+{
+    {
+        const juce::SpinLock::ScopedLockType lock(m_playLock);
+        m_playBuf = nullptr;
+    }
+    m_playHold.reset();
+}
+
+double RigProcessor::playSeconds() const
+{
+    auto *b = m_playBuf.load();
+    return b ? m_playPos.load() / b->rate : 0.0;
+}
+
+double RigProcessor::playLength() const
+{
+    auto *b = m_playBuf.load();
+    return b ? b->audio.getNumSamples() / b->rate : 0.0;
+}
 
 juce::Optional<juce::AudioPlayHead::PositionInfo> RigProcessor::StubPlayHead::getPosition() const
 {
@@ -178,6 +601,10 @@ bool RigProcessor::pollCabFromAmp()
 //==============================================================================
 void RigProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    if (isRecording() && sampleRate != m_rate)
+        stopRecording();  // a take cannot change rate halfway through
+    m_rate = sampleRate;
+    m_diCopy.setSize(2, juce::jmax(samplesPerBlock, 64));
     m_playHead.sampleRate = sampleRate;
     for (YsfxProcessor *child : {&m_pedals, &m_amp, &m_strip, &m_master}) {
         child->setPlayHead(&m_playHead);
@@ -209,6 +636,15 @@ void RigProcessor::runChild(YsfxProcessor &child, juce::AudioBuffer<float> &buff
 void RigProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuffer &midi)
 {
     juce::ScopedNoDenormals noDenormals;
+    const int n = buffer.getNumSamples();
+    const bool rec = m_recWriter.load() != nullptr;
+    if (rec) {
+        // the DI, before anything touches it
+        if (n > m_diCopy.getNumSamples())
+            m_diCopy.setSize(2, n, false, false, true);
+        for (int ch = 0; ch < 2; ++ch)
+            m_diCopy.copyFrom(ch, 0, buffer, juce::jmin(ch, buffer.getNumChannels() - 1), 0, n);
+    }
     runChild(m_pedals, buffer, midi, false);
 
     float pk = 0.0f;
@@ -221,6 +657,71 @@ void RigProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuff
         runChild(m_strip, buffer, midi, false);
     if (masterOn)
         runChild(m_master, buffer, midi, false);
+
+    if (rec && buffer.getNumChannels() >= 2) {
+        const juce::SpinLock::ScopedTryLockType lock(m_recLock);
+        if (lock.isLocked() && m_recWriter.load() != nullptr) {
+            m_recWriter.load()->write(buffer.getArrayOfReadPointers(), n);
+            m_recDiWriter->write(m_diCopy.getArrayOfReadPointers(), n);
+            m_recFrames += n;
+        }
+    }
+
+    // ---- after the tap: things you hear but never record ----
+    // a take playing back
+    if (m_playBuf.load() != nullptr) {
+        const juce::SpinLock::ScopedTryLockType lock(m_playLock);
+        if (PlayBuf *pb = lock.isLocked() ? m_playBuf.load() : nullptr) {
+            const double step = pb->rate / m_rate;
+            const int len = pb->audio.getNumSamples();
+            double pos = m_playPos.load();
+            const int chans = juce::jmin(2, buffer.getNumChannels());
+            for (int i = 0; i < n && pos < len - 1; ++i, pos += step) {
+                const int i0 = (int)pos;
+                const float fr = (float)(pos - i0);
+                for (int ch = 0; ch < chans; ++ch) {
+                    const float *src = pb->audio.getReadPointer(ch);
+                    buffer.addSample(ch, i, src[i0] + fr * (src[i0 + 1] - src[i0]));
+                }
+            }
+            m_playPos = pos;
+            if (pos >= len - 1)
+                m_playBuf = nullptr;  // done; the message thread drops the buffer
+        }
+    }
+
+    // the click: a short sine ping, higher on the one
+    const bool click = clickOn.load();
+    if (click || m_clickEnv > 1e-4) {
+        if (click && !m_clickWasOn) {
+            m_clickCountdown = 0;
+            m_clickBeat = 0;
+        }
+        const double beat = 60.0 / juce::jlimit(20.0, 400.0, clickBpm.load()) * m_rate;
+        const double decay = std::exp(-1.0 / (0.030 * m_rate));
+        const float level = clickLevel.load() * 0.5f;
+        const int chans = juce::jmin(2, buffer.getNumChannels());
+        for (int i = 0; i < n; ++i) {
+            if (click) {
+                m_clickCountdown -= 1;
+                if (m_clickCountdown <= 0) {
+                    m_clickCountdown += beat;
+                    m_clickHz = (m_clickBeat % 4 == 0) ? 1760.0 : 1174.7;
+                    m_clickBeat += 1;
+                    m_clickEnv = 1.0;
+                    m_clickPhase = 0;
+                }
+            }
+            if (m_clickEnv > 1e-4) {
+                const float v = (float)(std::sin(m_clickPhase) * m_clickEnv) * level;
+                m_clickPhase += 2.0 * juce::MathConstants<double>::pi * m_clickHz / m_rate;
+                m_clickEnv *= decay;
+                for (int ch = 0; ch < chans; ++ch)
+                    buffer.addSample(ch, i, v);
+            }
+        }
+    }
+    m_clickWasOn = click;
     m_playHead.samples += buffer.getNumSamples();
 }
 
@@ -571,8 +1072,81 @@ public:
         m_classic.setButtonText("Classic view");
         m_classic.setToggleState(m_proc.classicView, juce::dontSendNotification);
         m_classic.onClick = [this] { m_proc.classicView = m_classic.getToggleState(); applyView(); };
+
+        // record an idea
+        setupLabel(m_recTitle, "IDEAS", 20.0f);
+        m_rec.setClickingTogglesState(true);
+        m_rec.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffe02020));
+        m_rec.setToggleState(m_proc.isRecording(), juce::dontSendNotification);
+        m_rec.onClick = [this] {
+            if (m_rec.getToggleState()) {
+                if (!m_proc.startRecording())
+                    m_rec.setToggleState(false, juce::dontSendNotification);
+            } else {
+                m_proc.stopRecording();
+            }
+            updateRec();
+        };
+        m_recFolder.setButtonText("FOLDER");
+        m_recFolder.onClick = [] { RigProcessor::revealDir(RigProcessor::recordingsDir()); };
+        setupLabel(m_recInfo, "", 13.0f);
+        m_recInfo.setColour(juce::Label::textColourId, rigui::kDim);
+        m_recInfo.setMinimumHorizontalScale(0.6f);
+
+        // the ideas played on this head, newest first
+        m_ideaBox.setJustificationType(juce::Justification::centredLeft);
+        m_ideaBox.setTextWhenNoChoicesAvailable("no ideas on this head yet");
+        m_ideaBox.setTextWhenNothingSelected("pick an idea");
+        m_play.setClickingTogglesState(true);
+        m_play.setColour(juce::TextButton::buttonOnColourId, kStripAccent);
+        m_play.onClick = [this] {
+            if (m_play.getToggleState()) {
+                int i = m_ideaBox.getSelectedItemIndex();
+                if (i < 0 || i >= (int)m_ideas.size() || !m_proc.playIdea(m_ideas[(size_t)i]))
+                    m_play.setToggleState(false, juce::dontSendNotification);
+            } else {
+                m_proc.stopIdea();
+            }
+            updateRec();
+        };
+        m_reaper.setButtonText("REAPER");
+        m_reaper.onClick = [this] {
+            int i = m_ideaBox.getSelectedItemIndex();
+            if (i < 0 || i >= (int)m_ideas.size())
+                return;
+            juce::String err;
+            if (!m_proc.openInReaper(m_ideas[(size_t)i], err))
+                m_recInfo.setText(err, juce::dontSendNotification);
+            else
+                m_recInfo.setText("opened in REAPER: Idea " + m_ideas[(size_t)i].stamp, juce::dontSendNotification);
+            m_recInfoHold = juce::Time::currentTimeMillis() + 4000;
+        };
+
+        // the click
+        m_clickOn.setButtonText("CLICK");
+        m_clickOn.setColour(juce::ToggleButton::tickColourId, kMasterAccent);
+        m_clickOn.setToggleState(m_proc.clickOn, juce::dontSendNotification);
+        m_clickOn.onClick = [this] { m_proc.clickOn = m_clickOn.getToggleState(); };
+        m_bpm.setSliderStyle(juce::Slider::LinearBar);
+        m_bpm.setRange(40.0, 240.0, 1.0);
+        m_bpm.setValue(m_proc.clickBpm, juce::dontSendNotification);
+        m_bpm.setTextValueSuffix(" bpm");
+        m_bpm.setColour(juce::Slider::trackColourId, kMasterAccent.withAlpha(0.6f));
+        m_bpm.onValueChange = [this] { m_proc.clickBpm = m_bpm.getValue(); };
+        m_clickLevel.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        m_clickLevel.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        m_clickLevel.setRange(0.0, 1.0, 0.01);
+        m_clickLevel.setValue(m_proc.clickLevel, juce::dontSendNotification);
+        m_clickLevel.setColour(juce::Slider::rotarySliderFillColourId, kMasterAccent);
+        m_clickLevel.onValueChange = [this] { m_proc.clickLevel = (float)m_clickLevel.getValue(); };
+
+        refreshIdeas();
+        updateRec();
+
         m_content.addAndMakeVisible(m_inMeter);
-        for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_match, &m_cabOn, &m_classic})
+        for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_match, &m_cabOn, &m_classic,
+                                                                  &m_rec, &m_recFolder, &m_ideaBox, &m_play, &m_reaper,
+                                                                  &m_clickOn, &m_bpm, &m_clickLevel})
             m_content.addAndMakeVisible(c);
 
         layoutContent();
@@ -715,7 +1289,73 @@ private:
         y += 22 + knob + 18 + 30;
         m_cabOn.setBounds(x0 + w / 2 - 55, y, 110, 30);
 
+        m_recTitle.setBounds(x0, kHeight - 250, w, 28);
+        m_rec.setBounds(x0, kHeight - 214, w - 96, 40);
+        m_recFolder.setBounds(x0 + w - 88, kHeight - 214, 88, 40);
+        m_recInfo.setBounds(x0, kHeight - 170, w, 20);
+        m_ideaBox.setBounds(x0, kHeight - 146, w - 150, 32);
+        m_play.setBounds(x0 + w - 144, kHeight - 146, 44, 32);
+        m_reaper.setBounds(x0 + w - 96, kHeight - 146, 96, 32);
+        m_clickOn.setBounds(x0, kHeight - 108, 84, 30);
+        m_bpm.setBounds(x0 + 90, kHeight - 108, w - 90 - 50, 30);
+        m_clickLevel.setBounds(x0 + w - 44, kHeight - 112, 40, 40);
+
         m_classic.setBounds(x0 + w / 2 - 70, kHeight - 50, 140, 30);
+    }
+
+    static juce::String clock(double seconds)
+    {
+        int s = (int)seconds;
+        return juce::String(s / 60) + ":" + juce::String(s % 60).paddedLeft('0', 2);
+    }
+
+    void refreshIdeas()
+    {
+        const juce::String head = m_proc.ampIndex() >= 0 ? juce::File(m_proc.ampNames()[m_proc.ampIndex()]).getFileName() : juce::String();
+        m_ideas = RigProcessor::ideas(m_ampFileNow());
+        const int keep = m_ideaBox.getSelectedItemIndex();
+        m_ideaBox.clear(juce::dontSendNotification);
+        for (size_t i = 0; i < m_ideas.size(); ++i) {
+            const auto &idea = m_ideas[i];
+            juce::String label = juce::Time(idea.time).formatted("%b %d  %H:%M") + "   " + clock(idea.seconds);
+            if (idea.bpm > 0)
+                label += "   " + juce::String((int)idea.bpm) + " bpm";
+            m_ideaBox.addItem(label, (int)i + 1);
+        }
+        if (!m_ideas.empty())
+            m_ideaBox.setSelectedItemIndex(juce::jlimit(0, (int)m_ideas.size() - 1, keep < 0 ? 0 : keep), juce::dontSendNotification);
+        juce::ignoreUnused(head);
+    }
+
+    juce::String m_ampFileNow() const
+    {
+        // RigProcessor keeps the full paths privately; the JSON stores the file name
+        return m_proc.ampFileName();
+    }
+
+    void updateRec()
+    {
+        const bool on = m_proc.isRecording();
+        if (m_rec.getToggleState() != on)
+            m_rec.setToggleState(on, juce::dontSendNotification);
+        m_rec.setButtonText(on ? "STOP  " + clock(m_proc.recordedSeconds()) : "RECORD IDEA");
+        if (m_wasRecording && !on)
+            refreshIdeas();  // the take just landed
+        m_wasRecording = on;
+
+        const bool playing = m_proc.isPlaying();
+        if (m_play.getToggleState() != playing)
+            m_play.setToggleState(playing, juce::dontSendNotification);
+        m_play.setButtonText(playing ? juce::String(juce::CharPointer_UTF8("\xe2\x96\xa0")) : juce::String(juce::CharPointer_UTF8("\xe2\x96\xb6")));
+
+        if (juce::Time::currentTimeMillis() < m_recInfoHold)
+            return;
+        auto f = m_proc.lastRecording();
+        m_recInfo.setText(on ? f.getFileName()
+                          : playing ? "playing  " + clock(m_proc.playSeconds()) + " / " + clock(m_proc.playLength())
+                          : f.existsAsFile() ? "Saved " + f.getFileName() + "  (" + clock(m_proc.recordedSeconds()) + ")  + DI"
+                                             : juce::String(m_ideas.size()) + " idea" + (m_ideas.size() == 1 ? "" : "s") + " on this head",
+                          juce::dontSendNotification);
     }
 
     void layoutView(YsfxGraphicsView &view, YsfxProcessor &proc)
@@ -773,6 +1413,7 @@ private:
 
     void timerCallback() override
     {
+        updateRec();
         if (auto info = m_proc.pedals().getCurrentInfo(); info != m_pedalInfo) {
             m_pedalInfo = info;
             m_pedalView.setEffect(info ? info->effect.get() : nullptr);
@@ -793,6 +1434,7 @@ private:
             ysfx_t *fx = info ? info->effect.get() : nullptr;
             m_loadVar = fx ? ysfx_find_var(fx, "cab_load_ohms") : nullptr;
             m_tapVar = fx ? ysfx_find_var(fx, "amp_designed_ohms") : nullptr;
+            refreshIdeas();  // a different head shows its own ideas
         }
         if (auto info = m_proc.strip().getCurrentInfo(); info != m_stripInfo) {
             m_stripInfo = info;
@@ -846,6 +1488,14 @@ private:
     InputMeter m_inMeter;
     juce::ToggleButton m_cabOn, m_classic;
     juce::Slider m_micA, m_micB, m_breakup;
+    juce::Label m_recTitle, m_recInfo;
+    juce::TextButton m_rec, m_recFolder, m_play, m_reaper;
+    rigui::ClickCombo m_ideaBox;
+    juce::ToggleButton m_clickOn;
+    juce::Slider m_bpm, m_clickLevel;
+    std::vector<RigProcessor::Idea> m_ideas;
+    bool m_wasRecording = false;
+    int64_t m_recInfoHold = 0;
 };
 
 } // namespace
