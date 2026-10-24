@@ -163,6 +163,7 @@ private:
     double m_clickCountdown = 0, m_clickPhase = 0, m_clickEnv = 0, m_clickHz = 0;
     int m_clickBeat = 0;
     bool m_clickWasOn = false;
+    std::atomic<bool> m_clickResync{false};  // beat one on the take's first sample
 
     std::array<double, numCabKeys> m_cab{};
     bool m_cabKnown = false;  // false until first head supplies defaults

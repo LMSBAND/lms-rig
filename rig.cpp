@@ -127,6 +127,7 @@ bool RigProcessor::startRecording()
         return false;
     }
     m_recFrames = 0;
+    m_clickResync = true;  // the take starts on the one, so it sits on REAPER's grid at 0
     {
         const juce::SpinLock::ScopedLockType lock(m_recLock);
         m_recOut = std::move(o);
@@ -326,9 +327,11 @@ static juce::String rppJs(const juce::var &stage)
 }
 
 // The LMS Rig VST3 on a track, with the state blob the take was played
-// through. REAPER's VST chunk, as decoded from its own files:
-//   header line:  id, EE5EEDFE, ins + 64-bit masks, outs + masks, size, 1, FFFF1080
-//   body lines:   the plugin state, base64, 128 chars a line
+// through. REAPER's VST chunk, as decoded from files REAPER itself saved:
+//   header line:  id, EE5EEDFE, ins + 64-bit masks, outs + masks, body size, 1, FFFF1080
+//   body lines:   [int32 state size][int32 1][component state][int32 0][int32 0]
+//                 (the trailing pair is the edit-controller state, empty for JUCE),
+//                 base64, 128 chars a line
 //   last line:    AAAQAAAA (empty program name)
 // The id and class id are what REAPER registered the plugin under; read
 // from its plugin list when present, else the values it gave this build.
@@ -348,8 +351,14 @@ static juce::String rppVst(const juce::String &stateB64)
             break;
         }
     }
+    juce::MemoryOutputStream raw;
+    juce::Base64::convertFromBase64(raw, stateB64);
     juce::MemoryOutputStream state;
-    juce::Base64::convertFromBase64(state, stateB64);
+    state.writeInt((int)raw.getDataSize());
+    state.writeInt(1);
+    state.write(raw.getData(), raw.getDataSize());
+    state.writeInt(0);
+    state.writeInt(0);
 
     juce::MemoryOutputStream head;
     head.writeInt((int)id.getLargeIntValue());
@@ -420,9 +429,9 @@ bool RigProcessor::openInReaper(const Idea &idea, juce::String &error)
       << rppItem(idea.take, idea.seconds)
       << "  >\n"
       << "  <TRACK " << rppGuid() << "\n"
-      << "    NAME \"Guitar DI - " << s["ampName"].toString() << "\"\n"
+      << "    NAME \"LMS Rig - " << s["ampName"].toString() << "\"\n"
       << "    PEAKCOL 2763519\n"
-      << "    MUTESOLO 1 0 0\n"   // muted: the idea track is the sound, this is the re-amp
+      << "    MUTESOLO 0 0 0\n"
       << "    NCHAN 2\n"
       << "    FX 1\n"
       << "    MAINSEND 1 0\n"
@@ -442,8 +451,7 @@ bool RigProcessor::openInReaper(const Idea &idea, juce::String &error)
             p << rppJs(s["master"]);
     }
     p << "    >\n"
-      << rppItem(idea.di, idea.seconds)
-      << "  >\n"
+      << "  >\n"   // the rig alone on this track: play into it, or drop the DI on it to re-amp
       << ">\n";
 
     juce::File rpp = idea.json.withFileExtension("RPP");
@@ -693,7 +701,7 @@ void RigProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuff
     // the click: a short sine ping, higher on the one
     const bool click = clickOn.load();
     if (click || m_clickEnv > 1e-4) {
-        if (click && !m_clickWasOn) {
+        if ((click && !m_clickWasOn) || (rec && m_clickResync.exchange(false))) {
             m_clickCountdown = 0;
             m_clickBeat = 0;
         }
