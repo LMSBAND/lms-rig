@@ -1,7 +1,9 @@
 // LMS Rig — the hardware control surface (the HEAD box, v0). The wire contract
-// is surface/SPEC.md; the box is surface/firmware/head. The surface opens the
-// box's MIDI ports itself (by USB product name), so it works the same in the
-// standalone and in a DAW; everything happens on the message thread from a
+// is surface/SPEC.md; the box is surface/firmware/head. The surface finds the
+// box itself: a MIDI port named "LMS Head" (an S3 box), or a USB serial port
+// that answers PING with HELLO (the classic ESP32 box, plain MIDI bytes at
+// 115200). It works the same in the standalone and in a DAW; everything
+// happens on the message thread from a
 // timer: incoming CCs become slider moves, and what the box should show
 // (labels, values, selections) goes back out, only when it changed.
 //
@@ -33,7 +35,7 @@ public:
     juce::ValueTree getState() const;           // the per-channel gain memory
     void setState(const juce::ValueTree &state);
 
-    bool connected() const { return m_in != nullptr; }
+    bool connected() const { return m_in != nullptr || m_tty >= 0; }
 
 private:
     struct Event { uint8_t status, d1, d2; };
@@ -42,6 +44,10 @@ private:
     void timerCallback() override;
     void handleIncomingMidiMessage(juce::MidiInput *, const juce::MidiMessage &m) override;
     void scanPorts();
+    void scanSerial();
+    void readSerial();
+    void serialBytes(const uint8_t *d, int n);        // the box's bytes, parsed into events
+    void closeSerial();
     void handle(const Event &e);
     void onPot(int cc, int v14);
     void onButton(int i);
@@ -62,6 +68,7 @@ private:
     void sendCC(int cc, int value);
     void send14(int cc, int v14);
     void sendSysex(int msg, int slot, const juce::String &data);
+    void rawSysex(const juce::MemoryBlock &body);     // 7D 01 msg slot data..., framed and sent on whatever is connected
     juce::String labelOf(int sliderIndex) const;
     juce::String valueOf(int sliderIndex) const;
 
@@ -69,6 +76,14 @@ private:
     std::unique_ptr<juce::MidiInput> m_in;
     std::unique_ptr<juce::MidiOutput> m_out;
     int m_scanTick = 0;
+
+    // the serial box
+    int m_tty = -1;                                   // the open port, or -1
+    juce::String m_ttyPath;
+    bool m_ttyHello = false;                          // it answered: it's ours
+    juce::uint32 m_ttyOpenedAt = 0;
+    std::map<juce::String, juce::uint32> m_ttyTried;  // ports that didn't answer, and when
+    std::vector<uint8_t> m_sx; bool m_inSx = false; int m_ccState = 0; uint8_t m_ccNum = 0;
 
     juce::AbstractFifo m_fifo{512};
     std::array<Event, 512> m_events{};
