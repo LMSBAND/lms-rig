@@ -15,6 +15,7 @@
 #include <vector>
 
 class YsfxParameter;
+class ControlSurface;
 
 // Amp sliders that make up the "cab" (matched by name; slider numbers differ per amp)
 enum CabKey { cabType, cabOn, cabMic, cabTypeB, cabMicB, cabBreakup, numCabKeys };
@@ -88,6 +89,9 @@ public:
     std::atomic<double> clickBpm{120.0};
     std::atomic<float> clickLevel{0.5f};
 
+    // the hardware control surface (surface.h): opens the HEAD box's MIDI ports by name
+    ControlSurface &surface() { return *m_surface; }
+
     // editor view prefs, saved with the rig
     bool hideInactivePedals = false;
     bool classicView = false;  // the JSFX's own UIs instead of the native panels
@@ -103,7 +107,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return "LMS Rig"; }
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 0; }
 
@@ -127,6 +131,7 @@ private:
     void loadAmp(int index);
     void pushCabToAmp();
 
+    std::unique_ptr<ControlSurface> m_surface;
     YsfxProcessor m_pedals;
     YsfxProcessor m_amp;
     YsfxProcessor m_strip;

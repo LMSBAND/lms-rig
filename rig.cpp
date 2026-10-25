@@ -1,6 +1,7 @@
 // LMS Rig — see rig.h
 
 #include "rig.h"
+#include "surface.h"
 #include "rig_ui.h"
 #include "parameter.h"
 #include "components/graphics_view.h"
@@ -80,10 +81,12 @@ RigProcessor::RigProcessor()
     m_master.loadJsfxFile(m_lmsDir.getChildFile("lms_mega_increasinator.jsfx").getFullPathName(), nullptr, false, false);
     if (!m_ampPaths.isEmpty())
         loadAmp(0);
+    m_surface = std::make_unique<ControlSurface>(*this);
 }
 
 RigProcessor::~RigProcessor()
 {
+    m_surface.reset();
     stopRecording();
     m_recThread.stopThread(2000);
 }
@@ -785,6 +788,8 @@ void RigProcessor::getStateInformation(juce::MemoryBlock &dest)
         amps.addChild(a, -1, nullptr);
     }
     root.addChild(amps, -1, nullptr);
+    if (m_surface)
+        root.addChild(m_surface->getState(), -1, nullptr);
 
     juce::MemoryOutputStream stream(dest, false);
     root.writeToStream(stream);
@@ -797,6 +802,8 @@ void RigProcessor::setStateInformation(const void *data, int size)
         return;
     hideInactivePedals = root.getProperty("hideInactive", false);
     classicView = root.getProperty("classicView", false);
+    if (m_surface)
+        m_surface->setState(root.getChildWithName("surface"));
     tab = juce::jlimit(0, 2, (int)root.getProperty("tab", 0));
 
     juce::MemoryBlock pedalState;

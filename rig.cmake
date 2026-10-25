@@ -35,6 +35,7 @@ target_sources(lms_rig
     PRIVATE
         ${LMS_RIG_YSFX_SOURCES}
         "${LMS_RIG_DIR}/rig.cpp"
+        "${LMS_RIG_DIR}/surface.cpp"
         "${LMS_RIG_DIR}/rig.h"
         "${LMS_RIG_DIR}/rig_ui.cpp"
         "${LMS_RIG_DIR}/rig_ui.h")
