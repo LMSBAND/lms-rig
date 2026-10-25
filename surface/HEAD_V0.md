@@ -4,7 +4,10 @@ Twelve 10k pots, four buttons, the 20x4 you have, one ESP32-S3-DevKitC-1. Nothin
 Firmware: `firmware/head/head.ino` (board esp32:esp32:esp32s3, USB Mode "USB-OTG (TinyUSB)", library
 hd44780). The rig finds it by its USB name, "LMS Head".
 
-Every pot: one end **3V3**, other end GND, wiper to its pin. Every button: pin to GND. LCD backpack: 5V, GND, SDA, SCL.
+Every pot: one end **3V3**, other end GND, wiper to its pin. Every button: pin to GND.
+The display is DFRobot's "I2C LCD Module V1.2" (a 2004 with the backpack and the blue contrast pot): of its
+cable use VCC -> 5V, GND -> GND, SCL -> 39, SDA -> 38; the other two wires stay unconnected. The library finds
+its address (DFRobot uses 0x20) by itself.
 
 | GPIO | goes to |
 |---|---|
@@ -12,8 +15,8 @@ Every pot: one end **3V3**, other end GND, wiper to its pin. Every button: pin t
 | 8, 9, 10 | AMP, CAB A, CAB B (the pot's travel is split into as many bands as the rig has heads / cabs) |
 | 11, 12, 13 | soft 1, 2, 3 (the rig's per-amp extra sliders, paged) |
 | 14, 15, 16, 17 | soft buttons 1, 2, 3, 4 (4 = PAGE) |
-| 38 / 39 | SDA / SCL to the LCD backpack |
-| 5V, GND | LCD backpack |
+| 38 / 39 | SDA / SCL of the LCD cable |
+| 5V, GND | VCC and GND of the LCD cable |
 
 Leave 19/20 (USB), 0/3/45/46 (strapping), 48 (onboard LED). Ground every pot's bottom end to the same
 GND rail as the ESP; the wipers are the only thing that moves.
