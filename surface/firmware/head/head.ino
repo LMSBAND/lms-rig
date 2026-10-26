@@ -193,7 +193,7 @@ void loop()
     }
     if (rigLive && millis() - rigSeen > 3000) waiting();
     if (!rigLive) {                                   // the idle card scrolls
-        static const char msg[] = "waiting for the rig   *   LMS RIG   *   in your ears   *   ";
+        static const char msg[] = "NOTICE: THEY ARE TRYING TO STEAL YOUR COMPUTER. INSTALL LINUX NOW.   *   LMS RIG   *   it's in your ears   *   ";
         static uint32_t due = 0; static int pos = 0;
         if (millis() >= due) {
             due = millis() + 250;
