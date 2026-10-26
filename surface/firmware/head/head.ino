@@ -154,7 +154,12 @@ void readButtons()
         bool down = digitalRead(BTN_PIN[i]) == LOW;
         if (down != btnDown[i] && now - btnT[i] > 30) {
             btnDown[i] = down; btnT[i] = now;
-            if (down) { cc(80 + i, 127); showSlot(0x10 + i); if (i == 3) showPage(); }   // "pressed: the new state wanted"
+            if (!down) continue;
+            if (i == 3) {                                   // PAGE: first press shows this page's card, a press while it's up advances
+                bool up = pageShowUntil != 0;
+                showPage();
+                if (up) { cc(83, 127); showSlot(0x13); }
+            } else { cc(80 + i, 127); showSlot(0x10 + i); }   // "pressed: the new state wanted"
         }
     }
 }
