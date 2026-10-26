@@ -192,6 +192,17 @@ void loop()
         readButtons();
     }
     if (rigLive && millis() - rigSeen > 3000) waiting();
+    if (!rigLive) {                                   // the idle card scrolls
+        static const char msg[] = "waiting for the rig   *   LMS RIG   *   in your ears   *   ";
+        static uint32_t due = 0; static int pos = 0;
+        if (millis() >= due) {
+            due = millis() + 250;
+            const int n = sizeof msg - 1; char b[21];
+            for (int k = 0; k < 20; ++k) b[k] = msg[(pos + k) % n];
+            b[20] = 0; setLine(2, b);
+            pos = (pos + 1) % n;
+        }
+    }
     if (pageShowUntil && millis() >= pageShowUntil) { pageShowUntil = 0; showSel(2); showSlot(lastSlot); }
     if (lcdDirty && millis() >= lcdDue) {
         for (int n = 0; n < 4; ++n) { lcd.setCursor(0, n); lcd.print(line[n]); }
