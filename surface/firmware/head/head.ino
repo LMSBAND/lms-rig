@@ -31,6 +31,10 @@ char     line[4][21];
 uint32_t lcdDue = 0;
 bool     lcdDirty = true;
 int      lastSlot = 0;              // the control the panel last touched, for line 4
+uint32_t pageShowUntil = 0;         // while set, lines 3-4 show the page card
+uint32_t rigSeen = 0; bool rigLive = false;   // the rig beats once a second; 3 s of silence = waiting
+void waiting();
+void showPage();
 
 void setLine(int n, const char *s) { snprintf(line[n], 21, "%-20.20s", s); lcdDirty = true; }
 
@@ -54,13 +58,16 @@ void onSysex()
     if (sxn < 5 || sx[1] != 0x7D) return;
     uint8_t msg = sx[3], slot = sx[4];
     const uint8_t *data = sx + 5; int n = sxn - 6;
+    rigSeen = millis(); if (!rigLive) { rigLive = true; }
     if (msg == 0x12) { hello(); return; }
+    if (msg == 0x13) return;        // heartbeat
     if (slot >= 0x22) return;
     if (msg == 0x01 || msg == 0x02) {
         char *dst = msg == 0x01 ? label[slot] : value[slot];
         int k = min(n, 20); memcpy(dst, data, k); dst[k] = 0;
-        if (slot >= 0x18 && slot <= 0x1A) { char b[21]; snprintf(b, 21, "%c %-18.18s", "ACB"[slot - 0x18], value[slot]); setLine(slot - 0x18, b); }
-        if (slot == lastSlot) { char b[21]; snprintf(b, 21, "%-9.9s %10.10s", label[slot], value[slot]); setLine(3, b); }
+        if (slot >= 0x18 && slot <= 0x1A && !(pageShowUntil && slot == 0x1A)) showSel(slot - 0x18);
+        if (msg == 0x01 && ((slot >= 0x08 && slot <= 0x0A) || (slot >= 0x10 && slot <= 0x12))) showPage();
+        else if (slot == lastSlot && !pageShowUntil) { char b[21]; snprintf(b, 21, "%-9.9s %10.10s", label[slot], value[slot]); setLine(3, b); }
     } else if (msg == 0x03 && n >= 2 && slot >= 0x18 && slot <= 0x1A) {
         selCount[slot - 0x18] = max(1, (data[0] << 7) | data[1]);
     } else if (msg == 0x04) {
@@ -101,7 +108,22 @@ int read14(int pin)
 void showSlot(int slot)
 {
     lastSlot = slot;
+    if (pageShowUntil) return;      // the page card has the bottom lines for a moment
     char b[21]; snprintf(b, 21, "%-9.9s %10.10s", label[slot], value[slot]); setLine(3, b);
+}
+void showSel(int i) { char b[21]; snprintf(b, 21, "%c %-18.18s", "ACB"[i], value[0x18 + i]); setLine(i, b); }
+void waiting()                      // nothing on the wire: the idle card, labels back to "--"
+{
+    rigLive = false; pageShowUntil = 0;
+    for (int i = 0; i < 0x22; ++i) { strcpy(label[i], "--"); value[i][0] = 0; }
+    setLine(0, "LMS HEAD"); setLine(1, "waiting for the rig"); setLine(2, ""); setLine(3, "");
+}
+void showPage()                     // PAGE pressed or the rig re-labelled the page: what the 1 2 3 knobs and buttons are now
+{
+    char b[21];
+    snprintf(b, 21, "%-6.6s %-6.6s %-6.6s", label[0x08], label[0x09], label[0x0A]); setLine(2, b);
+    snprintf(b, 21, "%-6.6s %-6.6s %-6.6s", label[0x10], label[0x11], label[0x12]); setLine(3, b);
+    pageShowUntil = millis() + 3000;
 }
 
 void readPots()
@@ -132,7 +154,7 @@ void readButtons()
         bool down = digitalRead(BTN_PIN[i]) == LOW;
         if (down != btnDown[i] && now - btnT[i] > 30) {
             btnDown[i] = down; btnT[i] = now;
-            if (down) { cc(80 + i, 127); showSlot(0x10 + i); }   // "pressed: the new state wanted"
+            if (down) { cc(80 + i, 127); showSlot(0x10 + i); if (i == 3) showPage(); }   // "pressed: the new state wanted"
         }
     }
 }
@@ -148,7 +170,7 @@ void setup()
     Wire.begin(SDA_PIN, SCL_PIN);
     for (int t = 0; t < 5 && lcd.begin(20, 4) != 0; ++t) delay(200);   // the backpack can need a beat after power-up
     lcd.noBacklight();              // DFRobot I2C LCD V1.2: hd44780's polarity autodetect lands backwards; this is ON
-    setLine(0, "LMS HEAD"); setLine(1, "waiting for the rig"); setLine(2, ""); setLine(3, "");
+    waiting();
 
     Serial.begin(115200);
     delay(300);
@@ -164,6 +186,8 @@ void loop()
         readPots();
         readButtons();
     }
+    if (rigLive && millis() - rigSeen > 3000) waiting();
+    if (pageShowUntil && millis() >= pageShowUntil) { pageShowUntil = 0; showSel(2); showSlot(lastSlot); }
     if (lcdDirty && millis() >= lcdDue) {
         for (int n = 0; n < 4; ++n) { lcd.setCursor(0, n); lcd.print(line[n]); }
         lcdDirty = false; lcdDue = millis() + 50;

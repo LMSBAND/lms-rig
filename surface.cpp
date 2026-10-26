@@ -195,6 +195,12 @@ void ControlSurface::timerCallback()
 
     if (m_out || (m_tty >= 0 && m_ttyHello))
         refresh(false);
+
+    // heartbeat: the box shows "waiting for the rig" when these stop
+    if (m_tty >= 0 && m_ttyHello && m_scanTick % 30 == 15) {
+        const uint8_t beat[] = {0xF0, 0x7D, 0x01, 0x13, 0x00, 0xF7};
+        ::write(m_tty, beat, sizeof beat);
+    }
 }
 
 void ControlSurface::handle(const Event &e)
