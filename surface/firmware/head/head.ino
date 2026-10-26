@@ -192,7 +192,7 @@ void loop()
         readButtons();
     }
     if (rigLive && millis() - rigSeen > 3000) waiting();
-    if (!rigLive) {                                   // the idle card: each message scrolls through once, 5 s of quiet, the other
+    if (!rigLive) {                                   // the idle card: each message scrolls through once, 15 s of quiet, the other
         static const char *msgs[] = {"it's in your ears...", "NOTICE: THEY ARE TRYING TO STEAL YOUR COMPUTER. INSTALL LINUX NOW."};
         static uint32_t due = 0; static int which = 0, pos = 0;
         if (millis() >= due) {
@@ -202,7 +202,7 @@ void loop()
                 for (int k = 0; k < 20; ++k) { int c = pos - 20 + k; b[k] = (c >= 0 && c < n) ? m[c] : ' '; }
                 b[20] = 0; setLine(2, b);
                 ++pos; due = millis() + 200;
-            } else { pos = 0; which ^= 1; due = millis() + 5000; }
+            } else { pos = 0; which ^= 1; due = millis() + 15000; }
         }
     }
     if (pageShowUntil && millis() >= pageShowUntil) { pageShowUntil = 0; showSel(2); showSlot(lastSlot); }
