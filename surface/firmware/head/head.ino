@@ -89,9 +89,13 @@ void midiIn()
 // ---- the panel, read ---------------------------------------------------------------------------
 int read14(int pin)
 {
+    static int filt[40];                                            // per-pin low-pass, indexed by GPIO
     long acc = 0;
     for (int k = 0; k < 8; ++k) acc += analogRead(pin);            // 12-bit x 8 -> 15-bit
-    return (int)(acc >> 1);                                         // 14-bit
+    int raw = (int)(acc >> 1);                                      // 14-bit
+    if (!filt[pin]) filt[pin] = raw;
+    filt[pin] += (raw - filt[pin]) / 4;                             // ~20 ms at 200 Hz; the ESP32 ADC is ~1 % noisy mid-travel
+    return filt[pin];
 }
 
 void showSlot(int slot)
@@ -104,11 +108,11 @@ void readPots()
 {
     for (int i = 0; i < 6; ++i) {
         int v = read14(POT_PIN[i]);
-        if (abs(v - potVal[i]) > 24) { potVal[i] = v; cc14(POT_CC[i], v); showSlot(i); }   // ~0.15 % of travel
+        if (abs(v - potVal[i]) > 48) { potVal[i] = v; cc14(POT_CC[i], v); showSlot(i); }   // ~0.15 % of travel
     }
     for (int i = 0; i < 3; ++i) {
         int v = read14(SOFT_PIN[i]);
-        if (abs(v - softVal[i]) > 24) { softVal[i] = v; cc14(26 + i, v); showSlot(0x08 + i); }
+        if (abs(v - softVal[i]) > 48) { softVal[i] = v; cc14(26 + i, v); showSlot(0x08 + i); }
     }
     for (int i = 0; i < 3; ++i) {
         // a pot as a selector: its travel split into `count` bands, with a little hysteresis at the edges
@@ -142,7 +146,8 @@ void setup()
     for (int i = 0; i < 0x22; ++i) { strcpy(label[i], "--"); value[i][0] = 0; }
 
     Wire.begin(SDA_PIN, SCL_PIN);
-    lcd.begin(20, 4);
+    for (int t = 0; t < 5 && lcd.begin(20, 4) != 0; ++t) delay(200);   // the backpack can need a beat after power-up
+    lcd.noBacklight();              // DFRobot I2C LCD V1.2: hd44780's polarity autodetect lands backwards; this is ON
     setLine(0, "LMS HEAD"); setLine(1, "waiting for the rig"); setLine(2, ""); setLine(3, "");
 
     Serial.begin(115200);
