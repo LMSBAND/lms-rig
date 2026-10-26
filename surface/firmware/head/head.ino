@@ -192,15 +192,17 @@ void loop()
         readButtons();
     }
     if (rigLive && millis() - rigSeen > 3000) waiting();
-    if (!rigLive) {                                   // the idle card scrolls
-        static const char msg[] = "NOTICE: THEY ARE TRYING TO STEAL YOUR COMPUTER. INSTALL LINUX NOW.   *   LMS RIG   *   it's in your ears   *   ";
-        static uint32_t due = 0; static int pos = 0;
+    if (!rigLive) {                                   // the idle card: each message scrolls through once, 5 s of quiet, the other
+        static const char *msgs[] = {"it's in your ears...", "NOTICE: THEY ARE TRYING TO STEAL YOUR COMPUTER. INSTALL LINUX NOW."};
+        static uint32_t due = 0; static int which = 0, pos = 0;
         if (millis() >= due) {
-            due = millis() + 250;
-            const int n = sizeof msg - 1; char b[21];
-            for (int k = 0; k < 20; ++k) b[k] = msg[(pos + k) % n];
-            b[20] = 0; setLine(2, b);
-            pos = (pos + 1) % n;
+            const char *m = msgs[which]; const int n = strlen(m);
+            if (pos <= n + 20) {
+                char b[21];
+                for (int k = 0; k < 20; ++k) { int c = pos - 20 + k; b[k] = (c >= 0 && c < n) ? m[c] : ' '; }
+                b[20] = 0; setLine(2, b);
+                ++pos; due = millis() + 200;
+            } else { pos = 0; which ^= 1; due = millis() + 5000; }
         }
     }
     if (pageShowUntil && millis() >= pageShowUntil) { pageShowUntil = 0; showSel(2); showSlot(lastSlot); }
