@@ -341,7 +341,7 @@ function run_stepper() local(mono, wet) (
   st_on ? (
     mono = (l_ + r_) * 0.5;
     // dry stays per-channel (guitar on L only must not drop 6 dB); octaves from the mono sum
-    wet = pb_stepper.lms_12stepper_proc(mono, 0, st_dn1, st_dn2, st_up);
+    wet = pb_stepper.lms_12stepper_proc(mono, 0, st_dn1, st_dn2, st_up, st_period);
     l_ = l_ * st_dry + wet;
     r_ = r_ * st_dry + wet;
   );
@@ -374,7 +374,7 @@ el_on  = 0; el_delay_ms = 380; el_fb = 0.45; el_blend = 0.5; el_depth = 0.35; el
 pw_on  = 0; pw_rate = 0.2; pw_depth = 0.6; pw_fb = 0.5; pw_manual = 0.3; pw_mix = 0.5;
 ub_on  = 0; ub_mode = 0; ub_amount = 0.35; ub_tone = 0.5;
 ma_on  = 0; ma_drive = 0.5; ma_tone = 0.5; ma_level = 0.5;
-st_on  = 0; st_dry = 1.0; st_dn1 = 0.5; st_dn2 = 0; st_up = 0;
+st_on  = 0; st_dry = 1.0; st_dn1 = 0.5; st_dn2 = 0; st_up = 0; st_period = 0;
 chain_order_sel = 0;
 in_comp_on = 0; in_comp_makeup = 1.0;
 out_comp_on = 0; out_comp_makeup = 1.0;
@@ -579,7 +579,9 @@ pb_eq_l.lms_paraeq_set(eq_mode, eq_lo, eq_mid, eq_hi, eq_pr);
 pb_eq_r.lms_paraeq_set(eq_mode, eq_lo, eq_mid, eq_hi, eq_pr);
 
 // Run YIN pitch detection (per-block, so this isn't a per-sample cost)
+tuner.track = st_on;   // the 12 Stepper locks its divider to the tuner's YIN
 tuner.lms_tuner_block();
+st_period = st_on && tuner.yin.freq > 0 ? srate / tuner.yin.freq : 0;
 
 
 // ============================================================

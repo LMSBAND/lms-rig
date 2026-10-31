@@ -4112,6 +4112,9 @@ function lms_tuner_init(yin_buf)
   // Power state — tuner is OFF by default to keep CPU free.
   // Turn on via the GUI's PWR button.
   this.on = 0;
+  // track: run the detector without the display, for anything else in the
+  // plugin that wants the pitch (the 12 Stepper locks its divider to it).
+  this.track = 0;
 
   // Smoothed display state
   this.disp_freq  = 0;
@@ -4132,7 +4135,7 @@ function lms_tuner_init(yin_buf)
 function lms_tuner_write(x)
   local(target)
 (
-  this.on ? (
+  this.on || this.track ? (
     this.yin.lms_yin_write(x);
   );
   // Mute target: only silences when tuner is on AND mute is engaged.
@@ -4142,9 +4145,9 @@ function lms_tuner_write(x)
 
 function lms_tuner_block()
 (
-  this.on ? (
+  this.on || this.track ? (
     // a full pass every ~1024 samples, sliced evenly across blocks
-    this.yin.lms_yin_step(ceil((this.yin.tau_max + 1) * samplesblock / 1024)) ? (
+    this.yin.lms_yin_step(ceil((this.yin.tau_max + 1) * samplesblock / 1024)) && this.on ? (
       // Tighter confidence gate (was 0.6) — refuses noise that produced
       // jitter; heavy smoothing on cents (alpha 0.18) keeps the needle
       // calm so it doesn't dance around.
@@ -5186,12 +5189,20 @@ function lms_12stepper_init() (
   this.env_rel = exp(-1 / (0.200 * srate));    // 200 ms release
   this.gate = 0;
   this.gate_a = 1 - exp(-1 / (0.005 * srate));
+  this.since = 0;
 );
 function lms_12stepper_set(range_norm) local(fc) (
   fc = 400 + range_norm * 800;                 // 400 Hz (bass) → 1200 Hz (keys)
   this.track_lp.lms_bq_set_lp(fc, 0.707);
 );
-function lms_12stepper_proc(x, dry, oct_dn, oct_dn2, oct_up)
+// period: the fundamental's period in samples from a pitch detector, 0 if
+// unknown. With it, the comparator is only believed once per period (an
+// edge earlier than 0.75 periods is a harmonic: a real low E through the
+// 800 Hz tracking filter still has its 2nd and 3rd above the fundamental and
+// double-clocked the divider, which is the thump you hear on a held note)
+// and a missed edge is made up at 1.25 periods so the sub never stalls.
+// Without it the divider runs free, as an OC-2 does.
+function lms_12stepper_proc(x, dry, oct_dn, oct_dn2, oct_up, period)
   local(track, abs_in, hyst, rose, sub1, sub2, up) (
   // Envelope follows the INPUT (OC-2 taps the input for its env detector)
   abs_in = abs(x);
@@ -5211,8 +5222,16 @@ function lms_12stepper_proc(x, dry, oct_dn, oct_dn2, oct_up)
     track >  hyst ? (this.schmitt_high = 1; rose = 1;);
   );
 
+  // Period lock (see above)
+  this.since += 1;
+  period > 0 ? (
+    rose && this.since < 0.75 * period ? rose = 0;
+    !rose && this.since >= 1.25 * period ? rose = 1;
+  );
+
   // CD4013 cascade: flip1 toggles on each rose; flip2 toggles on flip1's rising edge
   rose ? (
+    this.since = 0;
     this.flip1 = 1 - this.flip1;
     this.flip1 ? this.flip2 = 1 - this.flip2;
   );
