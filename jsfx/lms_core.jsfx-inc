@@ -777,6 +777,114 @@ function lms_sgate_proc(x)
 
 
 // ============================================================================
+//  SECTION 5b2: Input Expander — noise reduction ahead of the gain stages
+//
+//  A 2:1 downward expander with hysteresis, meant for the amp INPUT, where
+//  the noise is still small and linear. Opens at thresh, closes 8 dB below
+//  it, and below the close point the gain falls 1 dB per dB (floor -30 dB)
+//  instead of slamming to zero, so note tails fade rather than chop. The
+//  amp's own compression hides the tiny attack loss; a gate after the power
+//  amp cannot do that, it is cutting a signal that has already been squashed.
+//
+//  Usage:
+//    @init:   nr.lms_nr_init();
+//    @slider: nr.lms_nr_set(-60);        // threshold, dBFS at the input
+//    @sample: x = nr.lms_nr_proc(x);
+// ============================================================================
+
+function lms_nr_set(thresh_db)
+(
+  this.open_t = 10 ^ (thresh_db / 20);
+  this.close_t = 10 ^ ((thresh_db - 8) / 20);
+);
+
+function lms_nr_init()
+(
+  this.env = 0; this.gain = 1; this.open = 0;
+  this.env_att = exp(-1 / (srate * 0.0003));
+  this.env_rel = exp(-1 / (srate * 0.050));
+  this.g_att = exp(-1 / (srate * 0.0005));
+  this.g_rel = exp(-1 / (srate * 0.080));
+  this.lms_nr_set(-60);
+);
+
+function lms_nr_proc(x)
+  local(ax, target)
+(
+  ax = abs(x);
+  ax > this.env ? (
+    this.env = this.env_att * this.env + (1 - this.env_att) * ax;
+  ) : (
+    this.env = this.env_rel * this.env + (1 - this.env_rel) * ax;
+  );
+  this.open ? (
+    this.env < this.close_t ? this.open = 0;
+  ) : (
+    this.env > this.open_t ? this.open = 1;
+  );
+  target = this.open ? 1.0 : max(0.03, this.env / this.close_t);
+  target > this.gain ? (
+    this.gain = this.g_att * this.gain + (1 - this.g_att) * target;
+  ) : (
+    this.gain = this.g_rel * this.gain + (1 - this.g_rel) * target;
+  );
+  x * this.gain;
+);
+
+
+// ============================================================================
+//  SECTION 5b3: Hum Filter — mains-harmonic notch comb
+//
+//  Five notches, -30 dB at Q 25, on the fundamental and its first four
+//  harmonics: 2.4 Hz wide at 60 Hz, 12 Hz wide at 300 Hz. Narrow enough
+//  that no guitar note loses more than a sliver. mode 0 = off, 1 = 60 Hz,
+//  2 = 50 Hz.
+//
+//  Usage:
+//    @init:   hum.lms_hum_init();
+//    @slider: hum.lms_hum_set(mode);
+//    @sample: x = hum.lms_hum_proc(x);
+// ============================================================================
+
+function lms_hum_init()
+(
+  this.n1.lms_bq_init(); this.n2.lms_bq_init(); this.n3.lms_bq_init();
+  this.n4.lms_bq_init(); this.n5.lms_bq_init();
+  this.mode = 0;
+);
+
+function lms_hum_set(mode)
+  local(f)
+(
+  mode != this.mode ? (
+    this.mode = mode;
+    mode ? (
+      f = mode == 2 ? 50 : 60;
+      this.n1.lms_bq_set_peak(f, -30, 25);
+      this.n2.lms_bq_set_peak(f * 2, -30, 25);
+      this.n3.lms_bq_set_peak(f * 3, -30, 25);
+      this.n4.lms_bq_set_peak(f * 4, -30, 25);
+      this.n5.lms_bq_set_peak(f * 5, -30, 25);
+    ) : (
+      this.lms_hum_init();
+    );
+  );
+);
+
+function lms_hum_proc(x)
+(
+  this.mode ? (
+    x = this.n1.lms_bq_proc(x);
+    x = this.n2.lms_bq_proc(x);
+    x = this.n3.lms_bq_proc(x);
+    x = this.n4.lms_bq_proc(x);
+    x = this.n5.lms_bq_proc(x);
+  );
+  x;
+);
+
+
+// ============================================================================
 //  SECTION 5c: Tone Stacks — Amp EQ Topologies
 //
 //  Three families covering all amp sims:
@@ -828,7 +936,7 @@ function lms_tmb_set(bass, mid, treble)
   mid_q = this.mid_q_lo + mid * this.mid_q_range;
   mid_gain = (0.5 - mid) * this.mid_db;
   mid_gain -= (bass - 0.5) * this.xcouple_bass + (treble - 0.5) * this.xcouple_treb;
-  this.f_mid.lms_bq_set_peak(this.mid_freq, mid_gain * 2, mid_q);
+  this.f_mid.lms_bq_set_peak(this.mid_freq, mid_gain, mid_q);
 
   treb_freq = this.treb_lo + treble * this.treb_range;
   treb_gain = (treble - 0.5) * this.treb_db;
@@ -873,7 +981,7 @@ function lms_svt_eq_set(bass, mid, mid_freq_sel, treble, ulo_on, uhi_on)
   mid_freq_sel == 4 ? ( mid_freq = 3000; mid_q_base = 3.0; );
   mid_q = mid_q_base + (1.0 - mid) * 0.5;
   mid_db = (mid - 0.5) * 30;
-  this.f_mid.lms_bq_set_peak(mid_freq, mid_db * 2, mid_q);
+  this.f_mid.lms_bq_set_peak(mid_freq, mid_db, mid_q);
 
   // Treble: 6kHz high shelf, ±10dB
   treb_db = (treble - 0.5) * 20;
@@ -1338,7 +1446,7 @@ function lms_pp_pa_xfmr(sensitivity, lp_coeff, sat_mult, sat_div)
 function lms_pp_pa_xfmr_res(freq, db, q)
 (
   this.xfmr_res.lms_bq_init();
-  this.xfmr_res.lms_bq_set_peak(freq, db * 2, q);
+  this.xfmr_res.lms_bq_set_peak(freq, db, q);
   this.pa_has_xfmr_res = 1;
 );
 
@@ -1497,7 +1605,7 @@ function lms_se_pa_xfmr(sensitivity, lp_coeff, sat_mult, sat_div)
 function lms_se_pa_xfmr_res(freq, db, q)
 (
   this.xfmr_res.lms_bq_init();
-  this.xfmr_res.lms_bq_set_peak(freq, db * 2, q);
+  this.xfmr_res.lms_bq_set_peak(freq, db, q);
   this.pa_has_xfmr_res = 1;
 );
 
@@ -3524,8 +3632,8 @@ function lms_cab_init()
   this.cab_current_preset = -1;  // force first set
   this.cab_band_count = 0;
   this.cab_breakup_freq = 0;
-  this.cab_lp_base_freq = 12000;
-  this.cab_lp_base_q = 0.4;
+  this.cab_lp_base_freq = 6400;
+  this.cab_lp_base_q = 0.6;
   this.cab_res_base_freq = 100;
   this.cab_res_base_gain = 1.5;
   this.cab_res_base_q = 2.0;
@@ -3543,7 +3651,7 @@ function lms_cab_set_band(btype, freq, param1, param2)
   ) : btype == CAB_BT_LP ? (
     this.lms_bq_set_lp(freq, param1);
   ) : btype == CAB_BT_PK ? (
-    this.lms_bq_set_peak(freq, param1 * 2, param2);
+    this.lms_bq_set_peak(freq, param1, param2);
   ) : (
     // passthrough (CAB_BT_NONE or unknown)
     this.b0 = 1; this.b1 = 0; this.b2 = 0;
@@ -3641,15 +3749,18 @@ function lms_cab_set(preset_id)
         this.brk_bp.lms_bq_set_bp(this.cab_breakup_freq, 1.5);
       );
 
-      // Dust cap radiation: small center dome radiates above cone breakup.
+      // Dust cap radiation: small center dome radiates just above cone breakup.
       // Frequency scales with speaker size (bigger cone = lower breakup = lower dust cap).
-      this.cab_dust_cap_freq = max(5000, min(12000, this.cab_breakup_freq * 2.5));
-      this.dust_cap.lms_bq_set_peak(this.cab_dust_cap_freq, 3.0, 0.6);
+      // Was 2.5x breakup (10 kHz on a 4x12), which put +3 dB on the fizz band.
+      this.cab_dust_cap_freq = max(2500, min(5500, this.cab_breakup_freq * 1.3));
+      this.dust_cap.lms_bq_set_peak(this.cab_dust_cap_freq, 2.0, 0.8);
 
-      // Air ceiling LP: gentle rolloff, sole LP (no more double-stacking).
-      // Replaces old per-preset brick-wall LP that killed everything above 5-7kHz.
-      this.cab_lp_base_freq = max(8000, min(16000, this.cab_breakup_freq * 5));
-      this.cab_lp_base_q = 0.4;
+      // Cone rolloff LP: the sole LP. A 12" guitar cone stops radiating not far
+      // above its breakup peak (a 4x12 V30 is 20-30 dB down by 10 kHz); this is
+      // the cab's own fizz filter. Was 5x breakup (16 kHz, Q 0.4), which let the
+      // 6-16 kHz hash from the clipping stages straight through.
+      this.cab_lp_base_freq = max(4000, min(9000, this.cab_breakup_freq * 1.6));
+      this.cab_lp_base_q = 0.6;
       this.brk_lp.lms_bq_set_lp(this.cab_lp_base_freq, this.cab_lp_base_q);
       this.last_dyn_lp_freq = this.cab_lp_base_freq;
 
@@ -3746,7 +3857,7 @@ function lms_cab_proc(x, density)
     dyn_res_gain = (density - 1.0) * 2.0 * this.cab_breakup_amt;
     dyn_res_gain = max(0, min(3.0, dyn_res_gain));
     abs(dyn_res_gain - this.last_dyn_res_gain) > 0.2 ? (
-      this.brk_res.lms_bq_set_peak(this.cab_res_base_freq, dyn_res_gain * 2, this.cab_res_base_q);
+      this.brk_res.lms_bq_set_peak(this.cab_res_base_freq, dyn_res_gain, this.cab_res_base_q);
       this.last_dyn_res_gain = dyn_res_gain;
     );
     out = this.brk_res.lms_bq_proc(out);
@@ -5233,29 +5344,29 @@ function lms_paraeq_set(mode, lo_db, mid_db, hi_db, pr_db) (
     // PUNK — tight HP, mid peak narrow + mid-centred, aggressive presence
     this.hp.lms_bq_set_hp(80, 0.5);
     this.lo.lms_bq_set_loshelf(120, lo_db, 0.7);
-    this.md.lms_bq_set_peak(600,  mid_db * 2, 1.0);
-    this.pr.lms_bq_set_peak(3500, pr_db * 2, 0.9);
+    this.md.lms_bq_set_peak(600,  mid_db, 1.0);
+    this.pr.lms_bq_set_peak(3500, pr_db, 0.9);
     this.hi.lms_bq_set_hishelf(8000, hi_db, 0.7);
   ) : mode == 1 ? (
     // JAZZ — gentle HP, warm mid (low-mid centred, wider), rolled presence
     this.hp.lms_bq_set_hp(40, 0.5);
     this.lo.lms_bq_set_loshelf(180, lo_db, 0.7);
-    this.md.lms_bq_set_peak(800,  mid_db * 2, 0.7);
-    this.pr.lms_bq_set_peak(3000, pr_db * 2, 0.7);
+    this.md.lms_bq_set_peak(800,  mid_db, 0.7);
+    this.pr.lms_bq_set_peak(3000, pr_db, 0.7);
     this.hi.lms_bq_set_hishelf(6000, hi_db, 0.7);
   ) : mode == 2 ? (
     // METAL — deep scoop-ready mid @ 500Hz Q1.0, chug-friendly HP, air shelf
     this.hp.lms_bq_set_hp(60, 0.5);
     this.lo.lms_bq_set_loshelf(100, lo_db, 0.7);
-    this.md.lms_bq_set_peak(500,  mid_db * 2, 1.0);
-    this.pr.lms_bq_set_peak(3500, pr_db * 2, 1.0);
+    this.md.lms_bq_set_peak(500,  mid_db, 1.0);
+    this.pr.lms_bq_set_peak(3500, pr_db, 1.0);
     this.hi.lms_bq_set_hishelf(7000, hi_db, 0.7);
   ) : (
     // FLAT — generic voicing
     this.hp.lms_bq_set_hp(20, 0.5);
     this.lo.lms_bq_set_loshelf(150, lo_db, 0.7);
-    this.md.lms_bq_set_peak(1000, mid_db * 2, 0.7);
-    this.pr.lms_bq_set_peak(3500, pr_db * 2, 0.7);
+    this.md.lms_bq_set_peak(1000, mid_db, 0.7);
+    this.pr.lms_bq_set_peak(3500, pr_db, 0.7);
     this.hi.lms_bq_set_hishelf(8000, hi_db, 0.7);
   );
 );

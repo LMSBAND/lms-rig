@@ -49,13 +49,13 @@ slider27:50<0,100,1>-Bright Master (%)
 @init
 
 
-function bassman_poweramp_set(drive, presence) local(pres_freq, pres_db, pres_q) (
+function bassman_poweramp_set(drive, presence) (
   this.drive = drive;
-  // Presence in NFB loop (less NFB = presence has more effect)
-  pres_freq = 2000 + presence * 4500;
-  pres_db = presence * 7;
-  pres_q = 0.9 + presence * 0.9;
-  this.pres_f.lms_bq_set_peak(pres_freq, pres_db * 2, pres_q);
+  // Presence in the NFB loop: a shelf bounded by the feedback depth, and the
+  // NFB low-pass opens up as the feedback comes off (see the guitar heads).
+  this.pres_f.lms_bq_set_hishelf(2000, presence * 6, 0.7);
+  this.pa_nfb_base = 4000 + presence * 2500;
+  this.pa_nfb_max  = 5000 + presence * 2500;
 );
 // === INSTANCES ===
 inp.lms_input_stage_init(4200, 0.55, 1000, -2.0, 0.035);

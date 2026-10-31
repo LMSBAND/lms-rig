@@ -649,6 +649,11 @@ void RigProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuff
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     const bool rec = m_recWriter.load() != nullptr;
+    // The guitar is on input 1. The amps average L+R and the mono pedals do
+    // the same, so a silent input 2 cost 6 dB at the amp (REAPER puts a mono
+    // input on both track channels). Feed both channels from input 1.
+    if (buffer.getNumChannels() >= 2)
+        buffer.copyFrom(1, 0, buffer, 0, 0, n);
     if (rec) {
         // the DI, before anything touches it
         if (n > m_diCopy.getNumSamples())

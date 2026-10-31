@@ -49,16 +49,23 @@ slider24:1<0,2,1{4 ohm,8 ohm,16 ohm}>-Impedance Tap
 slider29:50<0,100,1>-Vintage Master (%)
 slider30:50<0,100,1>-Modern Master (%)
 
+slider31:-60<-90,-30,1>-Gate Threshold (dB)
+slider32:0<0,2,1{Off,60 Hz,50 Hz}>-Hum Filter
+slider33:0<0,100,1>-Tight (%)
+
 @init
 
 
-function poweramp_set(drive, presence) local(pres_freq, pres_db, pres_q) (
+function poweramp_set(drive, presence) (
   this.drive = drive;
-  // Mesa presence: resonant peak in NFB loop (not a shelf)
-  pres_freq = 3000 + presence * 4000;
-  pres_db = presence * 10;
-  pres_q = 1.5 + presence * 1.5;
-  this.pres_f.lms_bq_set_peak(pres_freq, pres_db * 2, pres_q);
+  // Presence lives in the power amp's negative-feedback loop: the pot bleeds the
+  // feedback signal's highs to ground, so above ~2 kHz the stage gets less
+  // feedback and its gain rises. A first-order shelf bounded by the loop's
+  // feedback depth, not a resonant peak. Less feedback also means the NFB
+  // low-pass opens up, so the knob drags that cutoff along with it.
+  this.pres_f.lms_bq_set_hishelf(2000, presence * 6, 0.7);
+  this.pa_nfb_base = 5500 + presence * 2500;
+  this.pa_nfb_max  = 6500 + presence * 2500;
 );
 // === INSTANCES ===
 inp.lms_input_stage_init(5000, 0.55, 1500, -1.5, 0.030);
@@ -115,7 +122,11 @@ pa.pres_f.lms_bq_init();
 pa.poweramp_set(0.5, 0.5);
 
 // Noise gate
-gate.lms_sgate_init(0.01, 0.002);
+nr.lms_nr_init();        // input expander, see lms_core 5b2
+hum.lms_hum_init();
+// Tight: interstage HP on the lead channels, 70-250 Hz. The hum lives here.
+tight_hp.lms_bq_init();
+tight_hp.lms_bq_set_hp(70, 0.7);
 
 // Spring reverb + tremolo + tape echo
 spring.lms_spring_init();
@@ -170,7 +181,7 @@ lim.lms_lim_init();
 lim.lms_lim_set(-0.5, 80);
 
 @slider
-in_level = 10 ^ (slider1 / 20);
+in_level = 10 ^ (min(slider1, slider3 > 0 ? -12 : 24) / 20);  // capped at -12 dB on the lead channels: past the knee it only adds noise
 gain = slider2 / 100;
 bright_cap.lms_bq_set_hishelf(2000, (1.0 - gain) * (1.0 - gain) * 4.0, 0.7);
 channel = slider3;
@@ -187,6 +198,9 @@ sag_depth = slider12 / 100;
 out_level = 10 ^ (slider13 / 20);
 fx_bypass = slider14;
 gate_on = slider15;
+nr.lms_nr_set(slider31);
+hum.lms_hum_set(slider32);
+tight_hp.lms_bq_set_hp(70 + slider33 * 1.8, 0.7);
 echo_mix = slider16 / 100;
 echo_time = slider17 / 100;
 echo_feedback = slider18 / 100;
@@ -237,7 +251,7 @@ cab_load_ohms > 0 ? (
 // ============================================================
 @block
 // ---- Recalculate from sliders (GFX changes don't trigger @slider) ----
-in_level = 10 ^ (slider1 / 20);
+in_level = 10 ^ (min(slider1, slider3 > 0 ? -12 : 24) / 20);  // capped at -12 dB on the lead channels: past the knee it only adds noise
 gain = slider2 / 100;
 bright_cap.lms_bq_set_hishelf(2000, (1.0 - gain) * (1.0 - gain) * 4.0, 0.7);
 channel = slider3;
@@ -254,6 +268,9 @@ sag_depth = slider12 / 100;
 out_level = 10 ^ (slider13 / 20);
 fx_bypass = slider14;
 gate_on = slider15;
+nr.lms_nr_set(slider31);
+hum.lms_hum_set(slider32);
+tight_hp.lms_bq_set_hp(70 + slider33 * 1.8, 0.7);
 echo_mix = slider16 / 100;
 echo_time = slider17 / 100;
 echo_feedback = slider18 / 100;
@@ -306,6 +323,12 @@ mono = (spl0 + spl1) * 0.5 * in_level;
 // Input clamp — catches record-arm spikes before the amp sees them
 mono = max(-1.0, min(1.0, mono));
 
+// Noise reduction here, before the gain stages: 2:1 expander, then the mains notches
+gate_on == 1 ? (
+  mono = nr.lms_nr_proc(mono);
+);
+mono = hum.lms_hum_proc(mono);
+
 // 0. RF filter (removes ultrasonic content before gain stages)
 mono = rf_filter.lms_bq_proc(mono);
 
@@ -343,6 +366,7 @@ channel == 0 ? (
 
   // V2a cathode bypass HP: 0.68uF/2.7k = 86Hz. Lows get ~12dB less gain.
   // Blend: 75% HP'd + 25% original (partial bypass, not full)
+  v1a_out = tight_hp.lms_bq_proc(v1a_out);
   v2a_input = v2a_cathode_hp.lms_bq_proc(v1a_out);
   v2a_input = v1a_out * 0.25 + v2a_input * 0.75;
 
@@ -363,6 +387,7 @@ channel == 0 ? (
   v1a_out = v1a.lms_triode_proc(mono, v1a_drive, bplus,
     1.5, 1.2, 0.80, 1.0, 0.30, 0.15);
 
+  v1a_out = tight_hp.lms_bq_proc(v1a_out);
   v2a_input = v2a_cathode_hp.lms_bq_proc(v1a_out);
   v2a_input = v1a_out * 0.25 + v2a_input * 0.75;
 
@@ -425,10 +450,6 @@ amp_out = pa.lms_pp_pa_proc(amp_out, bplus);
 
 amp_out = pa.pres_f.lms_bq_proc(amp_out);
 
-// === NOISE GATE ===
-gate_on == 1 ? (
-  amp_out = gate.lms_sgate_proc(amp_out);
-);
 
 // Impedance interaction — power delivery + damping factor
 amp_out *= ohm_vol;
@@ -575,6 +596,9 @@ slider11 != _old ? slider_automate(2^10);
 cy += bar_sp;
 _old = slider12; slider12 = lms_draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider12, 0, 100, "PSU Sag", 1);
 slider12 != _old ? slider_automate(2^11);
+cy += bar_sp;
+_old = slider33; slider33 = lms_draw_bar(c1x + pad, cy, col_w - pad2, bar_h, slider33, 0, 100, "Tight", 1);
+slider33 != _old ? slider_automate(2^32);
 
 // ============================================================================
 //  COL 2: TONE / POWER
@@ -620,6 +644,13 @@ slider14 != _old ? slider_automate(2^13);
 cy += bar_sp;
 _old = slider15; slider15 = lms_draw_toggle(c3x + pad, cy + 2, slider15, "Noise Gate");
 slider15 != _old ? slider_automate(2^14);
+cy += bar_sp;
+_old = slider31; slider31 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider31, -90, -30, "Gate Thresh", 1);
+slider31 != _old ? slider_automate(2^30);
+cy += bar_sp;
+strcpy(MS_BUF, "Off"); strcpy(MS_BUF+1, "60 Hz"); strcpy(MS_BUF+2, "50 Hz");
+_old = slider32; slider32 = lms_draw_mode_sel(c3x + pad, cy, col_w - pad2, bar_h, slider32, 2, "Hum Filter");
+slider32 != _old ? slider_automate(2^31);
 cy += bar_sp;
 _old = slider16; slider16 = lms_draw_bar(c3x + pad, cy, col_w - pad2, bar_h, slider16, 0, 100, "Echo Mix", 1);
 slider16 != _old ? slider_automate(2^15);
