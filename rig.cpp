@@ -601,6 +601,8 @@ YsfxParameter *RigProcessor::ampCabParam(CabKey k)
 
 void RigProcessor::setCabValue(CabKey k, double v)
 {
+    if (std::abs(v - m_cab[(size_t)k]) > 1e-9)
+        m_cabChanged = true;
     m_cab[(size_t)k] = v;
     if (auto *p = ampCabParam(k))
         p->setValueNotifyingHost(p->convertFromYsfxValue(v));
@@ -614,7 +616,7 @@ void RigProcessor::pushCabToAmp()
 
 bool RigProcessor::pollCabFromAmp()
 {
-    bool changed = false;
+    bool changed = m_cabChanged.exchange(false);
     for (int k = 0; k < numCabKeys; ++k) {
         if (auto *p = ampCabParam((CabKey)k)) {
             double v = p->convertToYsfxValue(p->getValue());

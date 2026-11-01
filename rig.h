@@ -46,7 +46,7 @@ public:
     double cabValue(CabKey k) const { return m_cab[k]; }
     void setCabValue(CabKey k, double v);
     YsfxParameter *ampCabParam(CabKey k);
-    bool pollCabFromAmp();  // adopt edits made in the amp's own UI; true if changed
+    bool pollCabFromAmp();  // adopt edits made in the amp's own UI; true if the cab changed since the last poll (any source)
 
     // Record an idea. Two 24-bit WAVs at the device rate land in
     // recordingsDir(): "Idea <stamp>.wav" is the rig's output, what you
@@ -172,6 +172,7 @@ private:
 
     std::array<double, numCabKeys> m_cab{};
     bool m_cabKnown = false;  // false until first head supplies defaults
+    std::atomic<bool> m_cabChanged{false};  // set by setCabValue (HEAD box, UI, state load) so the editor redraws
     std::array<int, numCabKeys> m_cabSlider{};  // slider index in the current amp, -1 if absent
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RigProcessor)
