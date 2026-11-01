@@ -95,6 +95,7 @@ public:
     // editor view prefs, saved with the rig
     bool hideInactivePedals = false;
     bool classicView = false;  // the JSFX's own UIs instead of the native panels
+    bool ideasAllHeads = false;  // the ideas list shows every head's takes, not just the loaded head's
     int tab = 0;  // bottom area: 0 amp, 1 channel strip, 2 master
 
     //==========================================================================

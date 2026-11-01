@@ -780,6 +780,7 @@ void RigProcessor::getStateInformation(juce::MemoryBlock &dest)
     root.setProperty("version", 1, nullptr);
     root.setProperty("hideInactive", hideInactivePedals, nullptr);
     root.setProperty("classicView", classicView, nullptr);
+    root.setProperty("ideasAllHeads", ideasAllHeads, nullptr);
     root.setProperty("tab", tab, nullptr);
     if (m_ampIndex >= 0)
         root.setProperty("amp", juce::File(m_ampPaths[m_ampIndex]).getFileName(), nullptr);
@@ -827,6 +828,7 @@ void RigProcessor::setStateInformation(const void *data, int size)
         return;
     hideInactivePedals = root.getProperty("hideInactive", false);
     classicView = root.getProperty("classicView", false);
+    ideasAllHeads = root.getProperty("ideasAllHeads", false);
     if (m_surface)
         m_surface->setState(root.getChildWithName("surface"));
     tab = juce::jlimit(0, 2, (int)root.getProperty("tab", 0));
@@ -1135,7 +1137,19 @@ public:
 
         // the ideas played on this head, newest first
         m_ideaBox.setJustificationType(juce::Justification::centredLeft);
-        m_ideaBox.setTextWhenNoChoicesAvailable("no ideas on this head yet");
+        m_ideaBox.setTextWhenNoChoicesAvailable(m_proc.ideasAllHeads ? "no ideas yet" : "no ideas on this head yet");
+        m_ideasAll.setButtonText("ALL");
+        m_ideasAll.setTooltip("show ideas from every head");
+        m_ideasAll.setClickingTogglesState(true);
+        m_ideasAll.setColour(juce::TextButton::buttonOnColourId, kStripAccent);
+        m_ideasAll.setToggleState(m_proc.ideasAllHeads, juce::dontSendNotification);
+        m_ideasAll.onClick = [this] {
+            m_proc.ideasAllHeads = m_ideasAll.getToggleState();
+            m_ideaBox.setTextWhenNoChoicesAvailable(m_proc.ideasAllHeads ? "no ideas yet" : "no ideas on this head yet");
+            m_ideaBox.setSelectedItemIndex(-1, juce::dontSendNotification);  // the list changes under the selection
+            refreshIdeas();
+            updateRec();
+        };
         m_ideaBox.setTextWhenNothingSelected("pick an idea");
         m_play.setClickingTogglesState(true);
         m_play.setColour(juce::TextButton::buttonOnColourId, kStripAccent);
@@ -1185,7 +1199,7 @@ public:
 
         m_content.addAndMakeVisible(m_inMeter);
         for (auto *c : std::initializer_list<juce::Component *>{&m_typeA, &m_typeB, &m_match, &m_cabOn, &m_classic,
-                                                                  &m_rec, &m_recFolder, &m_ideaBox, &m_play, &m_reaper,
+                                                                  &m_rec, &m_recFolder, &m_ideaBox, &m_ideasAll, &m_play, &m_reaper,
                                                                   &m_clickOn, &m_bpm, &m_clickLevel})
             m_content.addAndMakeVisible(c);
 
@@ -1333,7 +1347,8 @@ private:
         m_rec.setBounds(x0, kHeight - 214, w - 96, 40);
         m_recFolder.setBounds(x0 + w - 88, kHeight - 214, 88, 40);
         m_recInfo.setBounds(x0, kHeight - 170, w, 20);
-        m_ideaBox.setBounds(x0, kHeight - 146, w - 150, 32);
+        m_ideaBox.setBounds(x0, kHeight - 146, w - 202, 32);
+        m_ideasAll.setBounds(x0 + w - 196, kHeight - 146, 48, 32);
         m_play.setBounds(x0 + w - 144, kHeight - 146, 44, 32);
         m_reaper.setBounds(x0 + w - 96, kHeight - 146, 96, 32);
         m_clickOn.setBounds(x0, kHeight - 108, 84, 30);
@@ -1352,7 +1367,7 @@ private:
     void refreshIdeas()
     {
         const juce::String head = m_proc.ampIndex() >= 0 ? juce::File(m_proc.ampNames()[m_proc.ampIndex()]).getFileName() : juce::String();
-        m_ideas = RigProcessor::ideas(m_ampFileNow());
+        m_ideas = RigProcessor::ideas(m_proc.ideasAllHeads ? juce::String() : m_ampFileNow());
         const int keep = m_ideaBox.getSelectedItemIndex();
         m_ideaBox.clear(juce::dontSendNotification);
         for (size_t i = 0; i < m_ideas.size(); ++i) {
@@ -1360,6 +1375,8 @@ private:
             juce::String label = juce::Time(idea.time).formatted("%b %d  %H:%M") + "   " + clock(idea.seconds);
             if (idea.bpm > 0)
                 label += "   " + juce::String((int)idea.bpm) + " bpm";
+            if (m_proc.ideasAllHeads)
+                label += "   " + (idea.ampName.isNotEmpty() ? idea.ampName : idea.ampFile);
             m_ideaBox.addItem(label, (int)i + 1);
         }
         if (!m_ideas.empty())
@@ -1394,7 +1411,8 @@ private:
         m_recInfo.setText(on ? f.getFileName()
                           : playing ? "playing  " + clock(m_proc.playSeconds()) + " / " + clock(m_proc.playLength())
                           : f.existsAsFile() ? "Saved " + f.getFileName() + "  (" + clock(m_proc.recordedSeconds()) + ")  + DI"
-                                             : juce::String(m_ideas.size()) + " idea" + (m_ideas.size() == 1 ? "" : "s") + " on this head",
+                                             : juce::String(m_ideas.size()) + " idea" + (m_ideas.size() == 1 ? "" : "s")
+                                                   + (m_proc.ideasAllHeads ? " on all heads" : " on this head"),
                           juce::dontSendNotification);
     }
 
@@ -1529,7 +1547,7 @@ private:
     juce::ToggleButton m_cabOn, m_classic;
     juce::Slider m_micA, m_micB, m_breakup;
     juce::Label m_recTitle, m_recInfo;
-    juce::TextButton m_rec, m_recFolder, m_play, m_reaper;
+    juce::TextButton m_rec, m_recFolder, m_play, m_reaper, m_ideasAll;
     rigui::ClickCombo m_ideaBox;
     juce::ToggleButton m_clickOn;
     juce::Slider m_bpm, m_clickLevel;
