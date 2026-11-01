@@ -7,8 +7,10 @@
 #include "components/graphics_view.h"
 #include "ysfx.h"
 #include "BinaryData.h"
+#if JUCE_LINUX
 #include <unistd.h>
 #include <sys/wait.h>
+#endif
 
 static const char *const kCabSliderNames[numCabKeys] = {
     "Cabinet", "Cab Sim", "Mic Distance (%)", "Cabinet B", "Mic B Distance (%)", "Speaker Breakup (%)",
@@ -243,6 +245,7 @@ std::vector<RigProcessor::Idea> RigProcessor::ideas(const juce::String &ampFile)
     return out;
 }
 
+#if JUCE_LINUX
 // fork/exec, detached. xdg-open hangs on this desktop (xdg-mime never
 // returns), so the file manager and REAPER are started directly.
 static bool launchDetached(const juce::StringArray &argv)
@@ -283,11 +286,17 @@ static juce::String findExe(std::initializer_list<const char *> names)
     return {};
 }
 
+#endif
+
 bool RigProcessor::revealDir(const juce::File &dir)
 {
     dir.createDirectory();
+#if JUCE_LINUX
     juce::String fm = findExe({"dolphin", "nautilus", "thunar", "pcmanfm", "nemo", "xdg-open"});
     return fm.isNotEmpty() && launchDetached({fm, dir.getFullPathName()});
+#else
+    return dir.startAsProcess();  // Explorer / Finder
+#endif
 }
 
 static juce::String rppGuid()
@@ -462,6 +471,7 @@ bool RigProcessor::openInReaper(const Idea &idea, juce::String &error)
         error = "could not write " + rpp.getFileName();
         return false;
     }
+#if JUCE_LINUX
     juce::String reaper = findExe({"reaper"});
     if (reaper.isEmpty()) {
         error = "reaper not found on PATH; project written: " + rpp.getFileName();
@@ -469,6 +479,14 @@ bool RigProcessor::openInReaper(const Idea &idea, juce::String &error)
     }
     launchDetached({reaper, rpp.getFullPathName()});
     return true;
+#else
+    // REAPER owns .RPP on Windows and macOS
+    if (!rpp.startAsProcess()) {
+        error = "could not open REAPER; project written: " + rpp.getFileName();
+        return false;
+    }
+    return true;
+#endif
 }
 
 //==============================================================================

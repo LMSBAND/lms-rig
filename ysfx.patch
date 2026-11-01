@@ -36,3 +36,81 @@ index f9f1b1e..89e0584 100644
      return new YsfxProcessor;
  }
 +#endif
+diff --git a/exports/ysfx.txt b/exports/ysfx.txt
+index 1a6d622..ef17324 100644
+--- a/exports/ysfx.txt
++++ b/exports/ysfx.txt
+@@ -100,6 +100,7 @@ ysfx_swap_preset_in_bank
+ ysfx_enum_vars
+ ysfx_find_var
+ ysfx_read_var
++ysfx_gmem_read
+ ysfx_read_vmem
+ ysfx_read_vmem_single
+ ysfx_calculate_used_mem
+diff --git a/include/ysfx.h b/include/ysfx.h
+index 49296d4..e59efe7 100644
+--- a/include/ysfx.h
++++ b/include/ysfx.h
+@@ -432,6 +432,9 @@ YSFX_API void ysfx_enum_vars(ysfx_t *fx, ysfx_enum_vars_callback_t *callback, vo
+ YSFX_API ysfx_real *ysfx_find_var(ysfx_t *fx, const char *name);
+ // read a single value from a variable in the VM
+ YSFX_API ysfx_real ysfx_read_var(ysfx_t *fx, const char *name);
++// read `count` values of the shared gmem this effect is attached to, from `offset`;
++// pages nothing has touched read as 0. Returns false if the effect has no gmem.
++YSFX_API bool ysfx_gmem_read(ysfx_t *fx, uint32_t offset, uint32_t count, ysfx_real *out);
+ // read a chunk of virtual memory from the VM
+ YSFX_API void ysfx_read_vmem(ysfx_t *fx, uint32_t addr, ysfx_real *dest, uint32_t count);
+ // read single value from VM RAM
+diff --git a/plugin/components/graphics_view.cpp b/plugin/components/graphics_view.cpp
+index e8157d9..9b35e6f 100644
+--- a/plugin/components/graphics_view.cpp
++++ b/plugin/components/graphics_view.cpp
+@@ -562,6 +562,13 @@ void YsfxGraphicsView::Impl::tickGfx()
+     if (m_numWaitedRepaints > 1)
+         return;
+ 
++    // a hidden view doesn't run @gfx at all (as REAPER does with a closed FX
++    // window); the first frame back is a full redraw
++    if (!m_self->isShowing()) {
++        m_gfxDirty = true;
++        return;
++    }
++
+     ysfx_t *fx = m_fx.get();
+     jassert(fx);
+ 
+diff --git a/sources/ysfx_gmem.cpp b/sources/ysfx_gmem.cpp
+index 1be4955..3d3c2c8 100644
+--- a/sources/ysfx_gmem.cpp
++++ b/sources/ysfx_gmem.cpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include "ysfx_gmem.hpp"
++#include "ysfx.h"
+ #include "WDL/eel2/ns-eel.h"
+ #include <unordered_map>
+ #include <mutex>
+@@ -113,3 +114,22 @@ void** get_gmem_address(ysfx_t* fx)
+     else
+         return &it->second->ctx;
+ }
++
++bool ysfx_gmem_read(ysfx_t *fx, uint32_t offset, uint32_t count, ysfx_real *out)
++{
++    void **gram = get_gmem_address(fx);
++    if (!gram)
++        return false;
++    EEL_F **blocks = (EEL_F **)*gram;
++    for (uint32_t i = 0; i < count; ++i) {
++        const uint32_t w = offset + i;
++        EEL_F v = 0;
++        if (blocks && w < (uint32_t)NSEEL_RAM_BLOCKS * NSEEL_RAM_ITEMSPERBLOCK) {
++            EEL_F *b = blocks[w >> NSEEL_RAM_ITEMSPERBLOCK_LOG2];
++            if (b)
++                v = b[w & (NSEEL_RAM_ITEMSPERBLOCK - 1)];
++        }
++        out[i] = v;
++    }
++    return true;
++}

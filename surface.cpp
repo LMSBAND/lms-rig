@@ -2,10 +2,39 @@
 #include "rig.h"
 #include "parameter.h"
 #include "ysfx.h"
+#if !JUCE_WINDOWS
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#endif
+
+// The serial box, per platform. POSIX: a raw 115200 tty. Windows: no serial
+// (the S3 box's "LMS Head" MIDI port still works), so the port never opens.
+#if JUCE_WINDOWS
+static int ttyOpen(const char *) { return -1; }
+static long ttyRead(int, void *, size_t) { return -1; }
+static void ttyWrite(int, const void *, size_t) {}
+static void ttyClose(int) {}
+#else
+static int ttyOpen(const char *path)
+{
+    int fd = ::open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return -1;
+    termios tio{};
+    if (tcgetattr(fd, &tio) == 0) {
+        cfmakeraw(&tio);
+        cfsetispeed(&tio, B115200); cfsetospeed(&tio, B115200);
+        tio.c_cflag |= CLOCAL | CREAD; tio.c_cflag &= ~CRTSCTS;
+        tcsetattr(fd, TCSANOW, &tio);
+    }
+    tcflush(fd, TCIOFLUSH);
+    return fd;
+}
+static long ttyRead(int fd, void *buf, size_t n) { return (long)::read(fd, buf, n); }
+static void ttyWrite(int fd, const void *buf, size_t n) { (void)!::write(fd, buf, n); }
+static void ttyClose(int fd) { ::close(fd); }
+#endif
 
 static const char *const kFixedNames[6] = {"Gain|Pre Gain", "Bass|Low", "Mid|Middle|Tone", "Treble|High", "Presence|Tone Cut|Resonance", "@master"};
 static const juce::String kUnsent = juce::String::charToString(1);   // "never sent": not a value a slot can show
@@ -39,7 +68,7 @@ ControlSurface::~ControlSurface()
 // (opening the port resets a classic ESP32 devkit, which then says HELLO on its own too)
 void ControlSurface::closeSerial()
 {
-    if (m_tty >= 0) ::close(m_tty);
+    if (m_tty >= 0) ttyClose(m_tty);
     m_tty = -1; m_ttyHello = false; m_ttyPath.clear(); m_inSx = false; m_sx.clear(); m_ccState = 0;
 }
 
@@ -61,19 +90,11 @@ void ControlSurface::scanSerial()
     for (auto &path : candidates) {
         auto t = m_ttyTried.find(path);
         if (t != m_ttyTried.end() && now - t->second < 15000) continue;
-        int fd = ::open(path.toRawUTF8(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+        int fd = ttyOpen(path.toRawUTF8());
         if (fd < 0) { m_ttyTried[path] = now; continue; }
-        termios tio{};
-        if (tcgetattr(fd, &tio) == 0) {
-            cfmakeraw(&tio);
-            cfsetispeed(&tio, B115200); cfsetospeed(&tio, B115200);
-            tio.c_cflag |= CLOCAL | CREAD; tio.c_cflag &= ~CRTSCTS;
-            tcsetattr(fd, TCSANOW, &tio);
-        }
-        tcflush(fd, TCIOFLUSH);
         m_tty = fd; m_ttyPath = path; m_ttyHello = false; m_ttyOpenedAt = now;
         const uint8_t ping[] = {0xF0, 0x7D, 0x01, 0x12, 0x00, 0xF7};
-        ::write(fd, ping, sizeof ping);
+        ttyWrite(fd, ping, sizeof ping);
         break;
     }
 }
@@ -83,7 +104,7 @@ void ControlSurface::readSerial()
     if (m_tty < 0) return;
     uint8_t buf[256];
     for (;;) {
-        ssize_t n = ::read(m_tty, buf, sizeof buf);
+        long n = ttyRead(m_tty, buf, sizeof buf);
         if (n <= 0) break;
         serialBytes(buf, (int)n);
     }
@@ -91,7 +112,7 @@ void ControlSurface::readSerial()
     const juce::uint32 now = juce::Time::getMillisecondCounter();
     if (!m_ttyHello && (now - m_ttyOpenedAt) % 1000 < 40) {
         const uint8_t ping[] = {0xF0, 0x7D, 0x01, 0x12, 0x00, 0xF7};
-        ::write(m_tty, ping, sizeof ping);
+        ttyWrite(m_tty, ping, sizeof ping);
     }
 }
 
@@ -199,7 +220,7 @@ void ControlSurface::timerCallback()
     // heartbeat: the box shows "waiting for the rig" when these stop
     if (m_tty >= 0 && m_ttyHello && m_scanTick % 30 == 15) {
         const uint8_t beat[] = {0xF0, 0x7D, 0x01, 0x13, 0x00, 0xF7};
-        ::write(m_tty, beat, sizeof beat);
+        ttyWrite(m_tty, beat, sizeof beat);
     }
 }
 
@@ -354,7 +375,7 @@ void ControlSurface::sendCC(int cc, int value)
     if (it != m_sentCC.end() && it->second == value) return;
     m_sentCC[cc] = value;
     if (m_out) m_out->sendMessageNow(juce::MidiMessage::controllerEvent(1, cc, value));
-    if (m_tty >= 0 && m_ttyHello) { const uint8_t m[3] = {0xB0, (uint8_t)cc, (uint8_t)value}; ::write(m_tty, m, 3); }
+    if (m_tty >= 0 && m_ttyHello) { const uint8_t m[3] = {0xB0, (uint8_t)cc, (uint8_t)value}; ttyWrite(m_tty, m, 3); }
 }
 
 void ControlSurface::send14(int cc, int v14)
@@ -376,7 +397,7 @@ void ControlSurface::sendSysex(int msg, int slot, const juce::String &data)
     if (m_out) m_out->sendMessageNow(juce::MidiMessage::createSysExMessage(b.getData(), (int)b.getSize()));
     if (m_tty >= 0 && m_ttyHello) {
         const uint8_t f0 = 0xF0, f7 = 0xF7;
-        ::write(m_tty, &f0, 1); ::write(m_tty, b.getData(), b.getSize()); ::write(m_tty, &f7, 1);
+        ttyWrite(m_tty, &f0, 1); ttyWrite(m_tty, b.getData(), b.getSize()); ttyWrite(m_tty, &f7, 1);
     }
 }
 
@@ -385,7 +406,7 @@ void ControlSurface::rawSysex(const juce::MemoryBlock &b)
     if (m_out) m_out->sendMessageNow(juce::MidiMessage::createSysExMessage(b.getData(), (int)b.getSize()));
     if (m_tty >= 0 && m_ttyHello) {
         const uint8_t f0 = 0xF0, f7 = 0xF7;
-        ::write(m_tty, &f0, 1); ::write(m_tty, b.getData(), b.getSize()); ::write(m_tty, &f7, 1);
+        ttyWrite(m_tty, &f0, 1); ttyWrite(m_tty, b.getData(), b.getSize()); ttyWrite(m_tty, &f7, 1);
     }
 }
 
