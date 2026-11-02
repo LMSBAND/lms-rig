@@ -1,7 +1,10 @@
 // LMS Head, v0 (KISS): one classic ESP32 DevKit (38 pins), nothing else between the panel and the host.
 // Twelve 10k pots on the ESP's own ADC, four buttons on GPIO, the 20x4 on its I2C backpack. That's it.
-// The classic ESP32 has no native USB, so this is MIDI over the USB serial port (115200, plain MIDI
-// bytes); the rig finds it by sending PING and hearing HELLO. Wire contract: ../../SPEC.md.
+// Two transports, both always live: plain MIDI bytes on the USB serial port (115200; the rig finds it
+// by sending PING and hearing HELLO), and BLE-MIDI as "LMS Head" (BlueZ turns a paired BLE-MIDI device
+// into an ALSA MIDI port with that name, which the rig already looks for). The box answers on whichever
+// transport the rig was last heard on, so a box on both never doubles a button press.
+// WiFi is out on purpose: it takes ADC2, and six pots are on ADC2. Bluetooth doesn't. Wire contract: ../../SPEC.md.
 // Wiring: ../../HEAD_V0.md.  The six pots where the spec has encoders stand in for them: three send
 // a selection index (AMP / CAB A / CAB B), three send the soft encoders' absolute 14-bit value.
 //
@@ -10,6 +13,12 @@
 #include <Wire.h>
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLE2902.h>
+#include <BLESecurity.h>   // BLESecurityCallbacks only
+#include <esp_gap_ble_api.h>
+#include <Preferences.h>
 
 hd44780_I2Cexp lcd;
 
@@ -38,15 +47,146 @@ void showPage();
 
 void setLine(int n, const char *s) { snprintf(line[n], 21, "%-20.20s", s); lcdDirty = true; }
 
-// ---- MIDI out, as plain bytes on the USB serial port -------------------------------------------
-void cc(uint8_t n, uint8_t v) { uint8_t m[3] = {0xB0, n, v}; Serial.write(m, 3); }
+// ---- BLE-MIDI -----------------------------------------------------------------------------------
+// The standard MIDI-over-BLE service. Every packet: a header byte (timestamp high bits), then each
+// message preceded by a timestamp low byte. Incoming packets are unwrapped back into plain MIDI bytes
+// and fed to the same parser as the serial port, from loop(), never from the BLE task.
+#define BLE_MIDI_SERVICE "03b80e5a-ede8-4b33-a751-6ce34ec4c700"
+#define BLE_MIDI_CHAR    "7772e5db-3868-4112-a1a9-f2669d106bf3"
+BLECharacteristic *bleChar = nullptr;
+volatile bool bleConnected = false;
+volatile bool bleRestartAdvertising = false;
+uint16_t bleMtuPayload = 20;
+
+enum Via { viaNone, viaSerial, viaBle };
+Via rigVia = viaNone;               // where the rig was last heard: replies go there
+
+static uint8_t bleRx[1024];         // BLE task -> loop(), single producer / single consumer
+static volatile uint16_t bleRxHead = 0, bleRxTail = 0;
+static void bleRxPut(uint8_t b) { uint16_t h = bleRxHead, n = (h + 1) % sizeof bleRx; if (n != bleRxTail) { bleRx[h] = b; bleRxHead = n; } }
+
+volatile bool bleIconDirty = true;  // the LCD's Bluetooth icon: a host is connected (rig or not)
+
+struct ServerCallbacks : BLEServerCallbacks {
+    void onConnect(BLEServer *s) override { bleConnected = true; bleIconDirty = true; log_i("BLE connected"); }
+    void onDisconnect(BLEServer *s) override { bleConnected = false; bleIconDirty = true; bleRestartAdvertising = true; log_i("BLE disconnected"); }
+};
+
+// Just Works bonding: no screen to show a PIN on
+struct SecurityCallbacks : BLESecurityCallbacks {
+    uint32_t onPassKeyRequest() override { return 0; }
+    void onPassKeyNotify(uint32_t) override {}
+    bool onSecurityRequest() override { return true; }
+    bool onConfirmPIN(uint32_t) override { return true; }
+    void onAuthenticationComplete(esp_ble_auth_cmpl_t a) override
+    {
+        if (a.success) log_i("BLE bonded");
+        else log_w("BLE pairing failed, reason 0x%x", a.fail_reason);
+    }
+};
+
+// forget every host the box was paired with: stale keys on one side make pairing hang
+void forgetHosts()
+{
+    int n = esp_ble_get_bond_device_num();
+    if (n <= 0) return;
+    esp_ble_bond_dev_t *list = (esp_ble_bond_dev_t *)malloc(sizeof(esp_ble_bond_dev_t) * n);
+    if (!list) return;
+    esp_ble_get_bond_device_list(&n, list);
+    for (int i = 0; i < n; ++i) esp_ble_remove_bond_device(list[i].bd_addr);
+    free(list);
+    log_i("forgot %d paired host(s)", n);
+}
+
+struct MidiCallbacks : BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *c) override
+    {
+        // unwrap: drop the header and every timestamp byte, keep statuses and data
+        const uint8_t *p = c->getData(); size_t n = c->getLength();
+        log_d("BLE rx %u bytes", (unsigned)n);
+        if (n < 2 || !(p[0] & 0x80)) return;
+        size_t i = 1;
+        while (i < n) {
+            uint8_t b = p[i++];
+            if (b & 0x80) {                                    // a timestamp; a status may follow
+                if (i < n && (p[i] & 0x80)) bleRxPut(p[i++]);
+            } else bleRxPut(b);                                // data (running status, or SysEx continuing)
+        }
+    }
+};
+
+void bleSend(const uint8_t *m, int n)
+{
+    // one MIDI message per packet: header, timestamp, the message; SysEx gets a timestamp before F7
+    if (!bleConnected || !bleChar) return;
+    uint16_t t = millis() & 0x1FFF;
+    uint8_t hdr = 0x80 | ((t >> 7) & 0x3F), ts = 0x80 | (t & 0x7F);
+    uint8_t pkt[64]; int k = 0;
+    pkt[k++] = hdr; pkt[k++] = ts;
+    for (int i = 0; i < n && k < (int)sizeof pkt - 1; ++i) {
+        if (m[i] == 0xF7 && i > 0) pkt[k++] = ts;
+        pkt[k++] = m[i];
+    }
+    if (k > bleMtuPayload) k = bleMtuPayload;              // our messages fit 20 bytes; never send a broken one bigger
+    bleChar->setValue(pkt, k);
+    bleChar->notify();
+}
+
+void bleBegin(bool forget)
+{
+    BLEDevice::init("LMS Head");
+    // Bond when the host pairs, but never start pairing from here: BlueZ wants an agent to approve
+    // device-initiated pairing and cancels without one. (BLESecurity would force it on every connect,
+    // so the SMP parameters are set on the IDF layer directly.) The box keeps the keys, so after a
+    // reboot the host's stored keys still match and it reconnects on its own.
+    BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
+    uint8_t authReq = ESP_LE_AUTH_BOND, iocap = ESP_IO_CAP_NONE, keySize = 16;
+    uint8_t keys = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &authReq, 1);
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, 1);
+    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &keySize, 1);
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &keys, 1);
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &keys, 1);
+
+    // hold PAGE at power-up to forget paired hosts; a new pairing scheme does it once on its own
+    Preferences prefs;
+    prefs.begin("lmshead", false);
+    if (forget || prefs.getUChar("bondScheme", 0) != 3) { forgetHosts(); prefs.putUChar("bondScheme", 3); }
+    prefs.end();
+
+    BLEServer *server = BLEDevice::createServer();
+    server->setCallbacks(new ServerCallbacks());
+    BLEService *svc = server->createService(BLE_MIDI_SERVICE);
+    bleChar = svc->createCharacteristic(BLE_MIDI_CHAR,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE_NR | BLECharacteristic::PROPERTY_NOTIFY);
+    bleChar->addDescriptor(new BLE2902());
+    bleChar->setCallbacks(new MidiCallbacks());
+    uint8_t empty[2] = {0x80, 0x80};
+    bleChar->setValue(empty, 0);                            // a read returns no payload, per the spec
+    svc->start();
+    BLEAdvertising *adv = BLEDevice::getAdvertising();
+    adv->addServiceUUID(BLE_MIDI_SERVICE);
+    adv->setScanResponse(true);
+    BLEDevice::startAdvertising();
+}
+
+// ---- MIDI out: to the transport the rig was last heard on (both until it's heard) ----------------
+void midiOut(const uint8_t *m, int n)
+{
+    // Bluetooth only once the rig has spoken on it (HELLO is the exception, see hello()): an idle
+    // link flooded with pot jitter starves pairing and drops the connection
+    if (rigVia != viaBle) Serial.write(m, n);
+    if (rigVia == viaBle) bleSend(m, n);
+}
+void cc(uint8_t n, uint8_t v) { uint8_t m[3] = {0xB0, n, v}; midiOut(m, 3); }
 void cc14(uint8_t n, int v) { v = constrain(v, 0, 16383); cc(n, (v >> 7) & 127); cc(n + 32, v & 127); }
 void hello()
 {
     uint8_t m[] = {0xF0, 0x7D, 0x01, 0x10, 0x01, 'H', 'E', 'A', 'D', 0xF7};   // HELLO, firmware 1, "HEAD"
     sysexOut(m, sizeof m);
+    if (rigVia == viaNone) bleSend(m, sizeof m);    // announce on both until the rig picks one
 }
-void sysexOut(const uint8_t *d, int n) { Serial.write(d, n); }
+void sysexOut(const uint8_t *d, int n) { midiOut(d, n); }
 
 // ---- MIDI in: the host's labels, values, ranges, LED states -----------------------------------
 uint8_t sx[64]; int sxn = 0; bool inSx = false;
@@ -75,21 +215,37 @@ void onSysex()
     }
 }
 
+struct Parser {
+    // a byte at a time: SysEx is gathered, CCs from the host (pickup targets, LED states) are
+    // ignored in v0 -- pots send where they are, and there are no LEDs. One per transport, so a
+    // message split across BLE packets never mixes with serial bytes.
+    uint8_t buf[64]; int n = 0; bool inSx = false; int ccLeft = 0;
+    void feed(uint8_t b, Via via)
+    {
+        if (b == 0xF0) { inSx = true; n = 0; }
+        if (inSx) {
+            if (n < 64) buf[n++] = b;
+            if (b == 0xF7) {
+                inSx = false;
+                rigVia = via;                                  // the rig is talking on this one
+                memcpy(sx, buf, n); sxn = n; onSysex();
+            }
+            return;
+        }
+        if (b & 0x80) { ccLeft = (b & 0xF0) == 0xB0 ? 2 : 0; return; }
+        if (ccLeft > 0) --ccLeft;
+    }
+};
+Parser serialParser, bleParser;
+
 void midiIn()
 {
-    // a byte at a time off the serial port: SysEx is gathered, CCs from the host (pickup targets,
-    // LED states) are ignored in v0 -- pots send where they are, and there are no LEDs
-    static int ccLeft = 0;
-    while (Serial.available()) {
-        uint8_t b = (uint8_t)Serial.read();
-        if (b == 0xF0) { inSx = true; sxn = 0; }
-        if (inSx) {
-            if (sxn < 64) sx[sxn++] = b;
-            if (b == 0xF7) { inSx = false; onSysex(); }
-            continue;
-        }
-        if (b & 0x80) { ccLeft = (b & 0xF0) == 0xB0 ? 2 : 0; continue; }
-        if (ccLeft > 0) --ccLeft;
+    while (Serial.available()) serialParser.feed((uint8_t)Serial.read(), viaSerial);
+    while (bleRxTail != bleRxHead) { uint8_t b = bleRx[bleRxTail]; bleRxTail = (bleRxTail + 1) % sizeof bleRx; bleParser.feed(b, viaBle); }
+    if (bleRestartAdvertising) {                      // a dropped link: be findable again, and stop replying on it
+        bleRestartAdvertising = false;
+        if (rigVia == viaBle) rigVia = viaNone;
+        delay(100); BLEDevice::startAdvertising();
     }
 }
 
@@ -111,7 +267,7 @@ void showSlot(int slot)
     if (pageShowUntil) return;      // the page card has the bottom lines for a moment
     char b[21]; snprintf(b, 21, "%-9.9s %10.10s", label[slot], value[slot]); setLine(3, b);
 }
-void showSel(int i) { char b[21]; snprintf(b, 21, "%c %-18.18s", "ACB"[i], value[0x18 + i]); setLine(i, b); }
+void showSel(int i) { char b[21]; snprintf(b, 21, "%c %-17.17s", "ACB"[i], value[0x18 + i]); setLine(i, b); }   // col 19 of line 0: the BT icon
 void waiting()                      // nothing on the wire: the idle card, labels back to "--"
 {
     rigLive = false; pageShowUntil = 0;
@@ -175,9 +331,14 @@ void setup()
     Wire.begin(SDA_PIN, SCL_PIN);
     for (int t = 0; t < 5 && lcd.begin(20, 4) != 0; ++t) delay(200);   // the backpack can need a beat after power-up
     lcd.noBacklight();              // DFRobot I2C LCD V1.2: hd44780's polarity autodetect lands backwards; this is ON
+    static uint8_t btGlyph[8] = {0b00100, 0b10110, 0b01101, 0b00110, 0b01101, 0b10110, 0b00100, 0b00000};
+    lcd.createChar(0, btGlyph);
     waiting();
 
     Serial.begin(115200);
+    const bool forget = digitalRead(BTN_PIN[3]) == LOW;    // PAGE held at power-up
+    bleBegin(forget);
+    if (forget) { setLine(3, "forgot paired hosts"); }
     delay(300);
     hello();                        // and again whenever the rig asks (PING)
 }
@@ -191,7 +352,7 @@ void loop()
         readPots();
         readButtons();
     }
-    if (rigLive && millis() - rigSeen > 3000) waiting();
+    if (rigLive && millis() - rigSeen > 3000) { waiting(); rigVia = viaNone; }
     if (!rigLive) {                                   // the idle card: each message scrolls through once, 15 s of quiet, the other
         static const char *msgs[] = {"it's in your ears...", "NOTICE: THEY ARE TRYING TO STEAL YOUR COMPUTER. INSTALL LINUX NOW."};
         static uint32_t due = 0; static int which = 0, pos = 0;
@@ -208,6 +369,11 @@ void loop()
     if (pageShowUntil && millis() >= pageShowUntil) { pageShowUntil = 0; showSel(2); showSlot(lastSlot); }
     if (lcdDirty && millis() >= lcdDue) {
         for (int n = 0; n < 4; ++n) { lcd.setCursor(0, n); lcd.print(line[n]); }
-        lcdDirty = false; lcdDue = millis() + 50;
+        lcdDirty = false; lcdDue = millis() + 50; bleIconDirty = true;
+    }
+    if (bleIconDirty) {                                 // a Bluetooth host is connected: the rune, top right
+        bleIconDirty = false;
+        lcd.setCursor(19, 0);
+        if (bleConnected) lcd.write((uint8_t)0); else lcd.print(line[0][19]);
     }
 }

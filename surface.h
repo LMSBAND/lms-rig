@@ -48,6 +48,7 @@ private:
     void readSerial();
     void serialBytes(const uint8_t *d, int n);        // the box's bytes, parsed into events
     void closeSerial();
+    void reconnectBluetooth();                        // Linux: BlueZ won't reconnect a BLE-MIDI box by itself
     void handle(const Event &e);
     void onPot(int cc, int v14);
     void onButton(int i);
@@ -83,6 +84,10 @@ private:
     bool m_ttyHello = false;                          // it answered: it's ours
     juce::uint32 m_ttyOpenedAt = 0;
     std::map<juce::String, juce::uint32> m_ttyTried;  // ports that didn't answer, and when
+
+    // the Bluetooth box: a background bluetoothctl that connects a paired "LMS Head"
+    std::unique_ptr<juce::ChildProcess> m_btHelper;
+    juce::uint32 m_btLastTry = 0;
     std::vector<uint8_t> m_sx; bool m_inSx = false; int m_ccState = 0; uint8_t m_ccNum = 0;
 
     juce::AbstractFifo m_fifo{512};

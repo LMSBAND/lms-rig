@@ -189,9 +189,32 @@ void ControlSurface::handleIncomingMidiMessage(juce::MidiInput *, const juce::Mi
 }
 
 //==============================================================================
+// The Bluetooth box: BlueZ keeps the bond but doesn't reconnect a BLE-MIDI device on its own, so
+// while no box is connected the rig asks it to, every 15 s, in the background. A paired "LMS Head"
+// that's switched off costs a short scan each time; with nothing paired it's one bluetoothctl call.
+void ControlSurface::reconnectBluetooth()
+{
+#if JUCE_LINUX
+    if (connected()) return;
+    if (m_btHelper && m_btHelper->isRunning()) return;
+    const juce::uint32 now = juce::Time::getMillisecondCounter();
+    if (m_btLastTry != 0 && now - m_btLastTry < 15000) return;
+    m_btLastTry = now;
+    if (!juce::File("/usr/bin/bluetoothctl").existsAsFile()) return;
+    static const char *script =
+        "for a in $(bluetoothctl devices Paired 2>/dev/null | awk '/LMS Head/ {print $2}'); do "
+        "  bluetoothctl --timeout 6 scan le >/dev/null 2>&1 & sleep 4; "
+        "  bluetoothctl --timeout 8 connect \"$a\" >/dev/null 2>&1; wait; "
+        "done";
+    m_btHelper = std::make_unique<juce::ChildProcess>();
+    if (!m_btHelper->start(juce::StringArray{"/bin/sh", "-c", script}, 0))
+        m_btHelper.reset();
+#endif
+}
+
 void ControlSurface::timerCallback()
 {
-    if (++m_scanTick % 30 == 0) { scanPorts(); scanSerial(); }
+    if (++m_scanTick % 30 == 0) { scanPorts(); scanSerial(); reconnectBluetooth(); }
     readSerial();
 
     // a head swap or a channel change re-reads the head
